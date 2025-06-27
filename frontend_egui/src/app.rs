@@ -366,6 +366,15 @@ impl SnowGui {
         disks: Option<[Option<PathBuf>; 7]>,
         test_rom_path: Option<&Path>,
     ) {
+        let test_rom_path = if let Some(path) = test_rom_path {
+            if path.as_os_str().is_empty() {
+                None
+            } else {
+                Some(path)
+            }
+        } else {
+            None
+        };
         match self.emu.init_from_rom(path, display_rom_path, disks, test_rom_path) {
             Ok(p) => self.framebuffer.connect_receiver(p.frame_receiver),
             Err(e) => self.show_error(&format!("Failed to load ROM file: {}", e)),
