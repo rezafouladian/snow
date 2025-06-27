@@ -18,6 +18,11 @@ pub struct ModelSelectionDialog {
     main_rom_path: String,
     main_rom_valid: bool,
     main_rom_dialog: FileDialog,
+    
+    // Test ROM selection
+    test_rom_path: String,
+    test_rom_valid: bool,
+    test_rom_dialog: FileDialog,   
 
     // Display Card ROM (for Mac II only)
     display_rom_path: String,
@@ -37,6 +42,7 @@ pub struct ModelSelectionResult {
     pub model: MacModel,
     pub memory_size: usize,
     pub main_rom_path: PathBuf,
+    pub test_rom_path: Option<PathBuf>,
     pub display_rom_path: Option<PathBuf>,
 }
 
@@ -49,6 +55,22 @@ impl Default for ModelSelectionDialog {
             main_rom_path: String::new(),
             main_rom_valid: false,
             main_rom_dialog: FileDialog::new()
+                .add_file_filter(
+                    "ROM files (*.rom, *.bin)",
+                    std::sync::Arc::new(|p| {
+                        if let Some(ext) = p.extension() {
+                            let ext_str = ext.to_string_lossy().to_lowercase();
+                            ext_str == "rom" || ext_str == "bin"
+                        } else {
+                            false
+                        }
+                    }),
+                )
+                .default_file_filter("ROM files (*.rom, *.bin)")
+                .opening_mode(egui_file_dialog::OpeningMode::LastVisitedDir),
+            test_rom_path: String::new(),
+            test_rom_valid: false,
+            test_rom_dialog: FileDialog::new()
                 .add_file_filter(
                     "ROM files (*.rom, *.bin)",
                     std::sync::Arc::new(|p| {
@@ -184,6 +206,10 @@ impl ModelSelectionDialog {
             }
         }
     }
+    
+    fn validate_test_rom(&mut self) -> Result<()> {
+        Ok(())
+    }
 
     fn validate_display_rom(&mut self) -> Result<()> {
         if !self.display_rom_required {
@@ -222,9 +248,11 @@ impl ModelSelectionDialog {
 
         // Update file dialogs
         self.main_rom_dialog.update(ctx);
+        self.test_rom_dialog.update(ctx);
         self.display_rom_dialog.update(ctx);
 
         if self.main_rom_dialog.state() == egui_file_dialog::DialogState::Open
+            || self.test_rom_dialog.state() == egui_file_dialog::DialogState::Open
             || self.display_rom_dialog.state() == egui_file_dialog::DialogState::Open
         {
             return;
@@ -234,6 +262,15 @@ impl ModelSelectionDialog {
         if let Some(path) = self.main_rom_dialog.take_picked() {
             self.main_rom_path = path.to_string_lossy().to_string();
             if let Err(e) = self.validate_main_rom() {
+                self.error_message = e.to_string();
+            } else {
+                self.error_message.clear();
+            }
+        }
+
+        if let Some(path) = self.test_rom_dialog.take_picked() {
+            self.test_rom_path = path.to_string_lossy().to_string();
+            if let Err(e) = self.validate_test_rom() {
                 self.error_message = e.to_string();
             } else {
                 self.error_message.clear();
@@ -331,6 +368,26 @@ impl ModelSelectionDialog {
                 }
                 ui.end_row();
 
+                // Test ROM selection
+                ui.label(egui::RichText::new("Test ROM (optional)"));
+                ui.horizontal(|ui| {
+                    if ui
+                        .text_edit_singleline(&mut self.test_rom_path)
+                        .lost_focus()
+                    {
+                        if let Err(e) = self.validate_test_rom() {
+                            self.error_message = e.to_string();
+                        } else {
+                            self.error_message.clear();
+                        }
+                    }
+                    if ui.button("Browse...").clicked() {
+                        self.test_rom_dialog.pick_file();
+                    }
+                });
+
+                ui.end_row();
+
                 // Display Card ROM selection (Mac II only)
                 if self.display_rom_required {
                     ui.label(egui::RichText::new(
@@ -408,6 +465,7 @@ impl ModelSelectionDialog {
                             model: self.selected_model,
                             memory_size: self.memory_size,
                             main_rom_path: PathBuf::from(&self.main_rom_path),
+                            test_rom_path: Option::from(PathBuf::from(&self.test_rom_path)),
                             display_rom_path: if self.display_rom_required
                                 && !self.display_rom_path.is_empty()
                             {

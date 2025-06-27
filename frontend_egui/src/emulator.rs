@@ -77,14 +77,20 @@ impl EmulatorState {
         filename: &Path,
         display_rom_path: Option<&Path>,
         disks: Option<[Option<PathBuf>; 7]>,
+        test_rom_path: Option<&Path>,
     ) -> Result<EmulatorInitParams> {
         let rom = std::fs::read(filename)?;
+        let test_rom = if let Some(filename) = test_rom_path {
+            Some(std::fs::read(filename)?)
+        } else {
+            None
+        };
         let display_rom = if let Some(filename) = display_rom_path {
             Some(std::fs::read(filename)?)
         } else {
             None
         };
-        self.init(&rom, display_rom.as_deref(), disks)
+        self.init(&rom, display_rom.as_deref(), disks, test_rom.as_deref())
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -93,6 +99,7 @@ impl EmulatorState {
         rom: &[u8],
         display_rom: Option<&[u8]>,
         disks: Option<[Option<PathBuf>; 7]>,
+        test_rom: Option<&[u8]>,
     ) -> Result<EmulatorInitParams> {
         // Terminate running emulator (if any)
         self.deinit();
@@ -103,9 +110,9 @@ impl EmulatorState {
         let model =
             MacModel::detect_from_rom(rom).ok_or_else(|| anyhow!("Unsupported ROM file"))?;
         let (mut emulator, frame_recv) = if let Some(display_rom) = display_rom {
-            Emulator::new_with_extra_roms(rom, &[ExtraROMs::MDC12(display_rom)], model)
+            Emulator::new_with_extra_roms(rom, &[ExtraROMs::MDC12(display_rom)], model, test_rom)
         } else {
-            Emulator::new(rom, model)
+            Emulator::new(rom, model, test_rom)
         }?;
 
         let cmd = emulator.create_cmd_sender();

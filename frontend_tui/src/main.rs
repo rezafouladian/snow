@@ -120,7 +120,7 @@ fn main() -> Result<()> {
     let eventpump = SDLEventPump::new();
 
     // Initialize emulator
-    let (mut emulator, frame_recv) = Emulator::new(&rom, model)?;
+    let (mut emulator, frame_recv) = Emulator::new(&rom, model, None)?;
     let cmd = emulator.create_cmd_sender();
     if let Some(floppy_fn) = args.floppy_filename {
         cmd.send(EmulatorCommand::InsertFloppy(0, floppy_fn))?;

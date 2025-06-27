@@ -39,6 +39,8 @@ pub struct Workspace {
     /// Last opened Display Card ROM
     display_card_rom_path: Option<RelativePath>,
 
+    test_rom_path: Option<RelativePath>,
+
     /// Last loaded disks
     disks: [Option<RelativePath>; 7],
 
@@ -63,6 +65,7 @@ impl Default for Workspace {
             center_viewport_v: false,
             rom_path: None,
             display_card_rom_path: None,
+            test_rom_path: None,
             disks: core::array::from_fn(|_| None),
             windows: HashMap::new(),
         }
@@ -145,6 +148,14 @@ impl Workspace {
 
     pub fn get_display_card_rom_path(&self) -> Option<PathBuf> {
         self.display_card_rom_path.clone().map(|d| d.get_absolute())
+    }
+
+    pub fn set_test_rom_path(&mut self, p: &Path) {
+        self.test_rom_path = Some(RelativePath::from_absolute(p));
+    }
+
+    pub fn get_test_rom_path(&self) -> Option<PathBuf> {
+        self.test_rom_path.clone().map(|d| d.get_absolute())
     }
 
     /// Persists a window location

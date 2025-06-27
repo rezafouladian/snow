@@ -20,6 +20,7 @@ use anyhow::Result;
 use bit_set::BitSet;
 use log::*;
 use num_traits::{FromPrimitive, PrimInt, ToBytes};
+use sha2::digest::consts::P1;
 
 /// Size of a RAM page in MacBus::ram_dirty
 pub const RAM_DIRTY_PAGESIZE: usize = 256;
@@ -35,6 +36,7 @@ pub struct CompactMacBus<TRenderer: Renderer> {
 
     rom: Vec<u8>,
     pub(crate) ram: Vec<u8>,
+    test_rom: Vec<u8>,
 
     /// RAM pages (RAM_DIRTY_PAGESIZE bytes) written
     pub(crate) ram_dirty: BitSet,
@@ -107,7 +109,7 @@ where
     /// CrsrNew address
     const ADDR_CRSRNEW: Address = 0x08CE;
 
-    pub fn new(model: MacModel, rom: &[u8], renderer: TRenderer) -> Self {
+    pub fn new(model: MacModel, rom: &[u8], test_rom: Option<&[u8]>, renderer: TRenderer) -> Self {
         let ram_size = model.ram_size();
         let fb_alt_start = ram_size as Address - Video::<TRenderer>::FRAMEBUFFER_ALT_OFFSET;
         let fb_main_start = ram_size as Address - Video::<TRenderer>::FRAMEBUFFER_MAIN_OFFSET;
@@ -121,6 +123,7 @@ where
 
             rom: Vec::from(rom),
             ram: vec![0; ram_size],
+            test_rom: Vec::from(test_rom.unwrap_or(&[])),
             ram_dirty: BitSet::from_iter(0..(ram_size / RAM_DIRTY_PAGESIZE)),
             via: Via::new(model),
             video: Video::new(renderer),
@@ -285,8 +288,10 @@ where
             0x00EF_0000..=0x00EF_FFFF => self.via.read(addr),
             // Phase read (ignore)
             0x00F0_0000..=0x00F7_FFFF => Some(0xFF),
-            // Test software region (ignore)
-            0x00F8_0000..=0x00F9_FFFF => Some(0xFF),
+            // Test software region
+            0xF8_0000..=0xF9_FFFF => {
+                Some(*self.test_rom.get(addr as usize & self.rom_mask).unwrap_or(&0x0F))
+            }
 
             _ => None,
         };
@@ -322,8 +327,10 @@ where
             0x00DF_E1FF..=0x00DF_FFFF => self.swim.read(addr),
             // VIA
             0x00EF_0000..=0x00EF_FFFF => self.via.read(addr),
-            // Test software region (ignore)
-            0x00F8_0000..=0x00F9_FFFF => Some(0xFF),
+            // Test software region
+            0xF8_0000..=0xF9_FFFF => {
+                Some(*self.test_rom.get(addr as usize & self.rom_mask).unwrap_or(&0xFF))
+            }
 
             _ => None,
         };

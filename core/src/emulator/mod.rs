@@ -201,13 +201,15 @@ impl Emulator {
     pub fn new(
         rom: &[u8],
         model: MacModel,
+        test_rom: Option<&[u8]>,
     ) -> Result<(Self, crossbeam_channel::Receiver<DisplayBuffer>)> {
-        Self::new_with_extra_roms(rom, &[], model)
+        Self::new_with_extra_roms(rom, &[], model, test_rom)
     }
     pub fn new_with_extra_roms(
         rom: &[u8],
         extra_roms: &[ExtraROMs],
         model: MacModel,
+        test_rom: Option<&[u8]>,
     ) -> Result<(Self, crossbeam_channel::Receiver<DisplayBuffer>)> {
         // Set up channels
         let (cmds, cmdr) = crossbeam_channel::unbounded();
@@ -223,7 +225,7 @@ impl Emulator {
             | MacModel::SeFdhd
             | MacModel::Classic => {
                 // Initialize bus and CPU
-                let bus = CompactMacBus::new(model, rom, renderer);
+                let bus = CompactMacBus::new(model, rom, test_rom, renderer);
                 let mut cpu = Box::new(CpuM68000::new(bus));
                 assert_eq!(cpu.get_type(), model.cpu_type());
 

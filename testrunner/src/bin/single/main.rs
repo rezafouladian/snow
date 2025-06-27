@@ -42,7 +42,7 @@ fn main() -> Result<()> {
     let model = MacModel::detect_from_rom(&rom).expect("Cannot detect model from ROM file");
 
     // Initialize emulator
-    let (mut emulator, frame_recv) = Emulator::new(&rom, model)?;
+    let (mut emulator, frame_recv) = Emulator::new(&rom, model, None)?;
     let cmd = emulator.create_cmd_sender();
     let event_recv = emulator.create_event_recv();
     if let Some(floppy_fn) = args.floppy {
