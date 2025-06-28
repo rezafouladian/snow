@@ -334,6 +334,21 @@ where
             },
             // Sound
             0x00FB_0000..=0x00FB_FFFF => self.asc.write(addr, val),
+            // Speed
+            0x00FE_0000..=0x00FE_01FF => Some(()),
+            // RAM config
+            0x00FE_0200..=0x00FE_FFFF => Some(()),
+            //
+            0x00FC_0000..=0x00FC_01FF => Some(()),
+            //
+            0x00FC_0200..=0x00FC_FFFF => Some(()),
+            //
+            0x00F0_0000..=0x00F0_00FF => Some(()),
+            // PDS/SLIM card ROM
+            0x00E0_0000..=0x00E0_FFFF => None,
+            // ROM Expansion
+            0x00A0_0000..=0x00DF_FFFF => None,
+            
             _ => None,
         }
     }
