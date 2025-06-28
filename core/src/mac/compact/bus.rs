@@ -20,6 +20,8 @@ use anyhow::Result;
 use bit_set::BitSet;
 use log::*;
 use num_traits::{FromPrimitive, PrimInt, ToBytes};
+use crate::mac::asc::Asc;
+use crate::mac::macii::bus::CLOCK_SPEED;
 
 /// Size of a RAM page in MacBus::ram_dirty
 pub const RAM_DIRTY_PAGESIZE: usize = 256;
@@ -41,6 +43,7 @@ pub struct CompactMacBus<TRenderer: Renderer> {
 
     pub(crate) via: Via,
     pub(crate) scc: Scc,
+    pub(crate) asc: Asc,
     pub(crate) video: Video<TRenderer>,
     pub(crate) audio: AudioState,
     eclock: Ticks,
@@ -129,6 +132,7 @@ where
             scc: Scc::new(),
             swim: Swim::new(model.fdd_drives(), model.fdd_hd(), 8_000_000),
             scsi: ScsiController::new(),
+            asc: Asc::default(),
             mouse_ready: false,
 
             ram_mask: (ram_size - 1),
@@ -260,6 +264,84 @@ where
         }
     }
 
+    fn write_overlay_portable(&mut self, addr: Address, val: Byte) -> Option<()> {
+        if self.trace && !(0x0060_0000..=0x007F_FFFF).contains(&addr) {
+            trace!("WRO {:08X} - {:02X}", addr, val);
+        }
+
+        match addr {
+            // ROM (disables overlay)
+            0x0090_0000..=0x009F_FFFF => {
+                self.overlay = false;
+                self.write_normal_portable(addr, val)
+            }
+            // SCSI
+            0x00F9_0000..=0x00F9_FFFF => self.scsi.write(addr, val),
+            // RAM
+            0x0060_0000..=0x007F_FFFF => {
+                let idx = ((addr as usize) - 0x60_0000) & self.ram_mask;
+                self.ram_dirty.insert(idx / RAM_DIRTY_PAGESIZE);
+                Some(self.ram[idx] = val)
+            }
+            // SCC
+            0x00FD_0000..=0x00FD_FFFF => self.scc.write(addr >> 1, val),
+            // IWM
+            0x00F6_0000..=0x00F6_FFFF => self.swim.write(addr, val),
+            // VIA
+            0x00F7_0000..=0x00F7_FFFF => self.via.write(addr, val),
+            _ => None,
+        }
+    }
+
+    fn write_normal_portable(&mut self, addr: Address, val: Byte) -> Option<()> {
+        if self.trace && !(0x0000_0000..=0x003F_FFFF).contains(&addr) {
+            trace!("WR {:08X} - {:02X}", addr, val);
+        }
+
+        match addr {
+            // RAM
+            0x0000_0000..=0x008F_FFFF => {
+                // Duplicate framebuffers to video component
+                // (writes also go through RAM)
+                if self.fb_main.contains(&(addr & self.ram_mask as Address)) {
+                    let offset = ((addr & self.ram_mask as Address) - self.fb_main.start) as usize;
+                    self.video.framebuffers[0][offset] = val;
+                }
+                if self.fb_alt.contains(&(addr & self.ram_mask as Address)) {
+                    let offset = ((addr & self.ram_mask as Address) - self.fb_alt.start) as usize;
+                    self.video.framebuffers[1][offset] = val;
+                }
+
+                let idx = addr as usize & self.ram_mask;
+                self.ram_dirty.insert(idx / RAM_DIRTY_PAGESIZE);
+                Some(self.ram[idx] = val)
+            }
+            // SCSI
+            0x00F9_0000..=0x00F9_FFFF => self.scsi.write(addr, val),
+            // SCC
+            0x00FD_0000..=0x00FD_FFFF => self.scc.write(addr >> 1, val),
+            // IWM
+            0x00F6_0000..=0x00F6_FFFF => self.swim.write(addr, val),
+            // VIA
+            0x00F7_0000..=0x00F7_FFFF => {
+                self.via.write(addr, val);
+
+                Some(())
+            }
+            // Video
+            0x00FA_0000..=0x00FA_FFFF => {
+                let offset = (addr & 0x7FFF as Address) as usize;
+                self.video.framebuffers[0][offset] = val;
+                self.video.framebuffers[1][offset] = val;
+                
+                Some(())
+            },
+            // Sound
+            0x00FB_0000..=0x00FB_FFFF => self.asc.write(addr, val),
+            _ => None,
+        }
+    }
+
     fn read_overlay(&mut self, addr: Address) -> Option<Byte> {
         let result = match addr {
             // ROM
@@ -324,6 +406,71 @@ where
             0x00EF_0000..=0x00EF_FFFF => self.via.read(addr),
             // Test software region (ignore)
             0x00F8_0000..=0x00F9_FFFF => Some(0xFF),
+
+            _ => None,
+        };
+
+        if self.trace && !(0x0000_0000..=0x004F_FFFF).contains(&addr) {
+            trace!("RD {:08X} - {:02X?}", addr, result);
+        }
+        result
+    }
+
+    fn read_overlay_portable(&mut self, addr: Address) -> Option<Byte> {
+        let result = match addr {
+            // ROM
+            0x0000_0000..=0x000F_FFFF => {
+                Some(*self.rom.get(addr as usize & self.rom_mask).unwrap_or(&0xFF))
+            }
+            // Overlay flip
+            0x0090_0000..=0x009F_FFFF => {
+                self.overlay = false;
+                self.read_normal_portable(addr)
+            }
+            // SCSI
+            0x00F9_0000..=0x00F9_FFFF => self.scsi.read(addr),
+            // SCC
+            0x00FD_0000..=0x00FD_FFFF => self.scc.read(addr >> 1),
+            // IWM
+            0x00F6_0000..=0x00F6_FFFF => self.swim.read(addr),
+            // VIA
+            0x00F7_0000..=0x00F7_FFFF => self.via.read(addr),
+            // Phase read (ignore)
+            0x00F0_0000..=0x00F7_FFFF => Some(0xFF),
+            // Test software region (ignore)
+            0x00F8_0000..=0x00F8_FFFF => Some(0xFF),
+            // Video
+            0x00FA_0000..=0x00FA_FFFF => 
+                Some(0xFF),
+            _ => None,
+        };
+        if self.trace && !(0x0000_0000..=0x007F_FFFF).contains(&addr) {
+            trace!("RDO {:08X} - {:02X?}", addr, result);
+        }
+
+        result
+    }
+
+    fn read_normal_portable(&mut self, addr: Address) -> Option<Byte> {
+        let result = match addr {
+            // RAM
+            0x0000_0000..=0x008F_FFFF => Some(self.ram[addr as usize & self.ram_mask]),
+            // TODO: SLIM cards
+            // ROM
+            0x0090_0000..=0x009F_FFFF => {
+                Some(*self.rom.get(addr as usize & self.rom_mask).unwrap_or(&0xFF))
+            }
+            // SCSI
+            0x00F9_0000..=0x00F9_FFFF => self.scsi.read(addr),
+            // SCC
+            0x00FD_0000..=0x00FD_FFFF => self.scc.read(addr >> 1),
+            // IWM
+            0x00F6_0000..=0x00F6_FFFF => self.swim.read(addr),
+            // VIA
+            0x00F7_0000..=0x00F7_FFFF => self.via.read(addr),
+            // Test software region (ignore)
+            0x00F8_0000..=0x00F8_FFFF => Some(0xFF),
+            0x00FE_0000..=0x00FE_FFFF => Some(0xFF),
 
             _ => None,
         };
@@ -460,9 +607,15 @@ where
         }
 
         let val = if self.overlay {
-            self.read_overlay(addr)
+            match self.model {
+                MacModel::Portable => self.read_overlay_portable(addr),
+                _ => self.read_overlay(addr),
+            }
         } else {
-            self.read_normal(addr)
+            match self.model {
+                MacModel::Portable => self.read_normal_portable(addr),
+                _ => self.read_normal(addr),
+            }
         };
 
         if let Some(v) = val {
@@ -479,9 +632,15 @@ where
         }
 
         let written = if self.overlay {
-            self.write_overlay(addr, val)
+            match self.model {
+                MacModel::Portable => self.write_overlay_portable(addr, val),
+                _ => self.write_overlay(addr, val),
+            }
         } else {
-            self.write_normal(addr, val)
+            match self.model {
+                MacModel::Portable => self.write_normal_portable(addr, val),
+                _ => self.write_normal(addr, val),
+            }
         };
 
         if self.overlay && self.model <= MacModel::Plus && !self.via.a_out.overlay() {
@@ -544,7 +703,8 @@ where
         } else {
             self.swim.intdrive = self.via.a_out.drivesel();
         }
-
+        
+        /*
         // VBlank interrupt
         if self.video.get_clr_vblank() {
             self.via.ifr.set_vblank(true);
@@ -568,7 +728,7 @@ where
             let scanline = self.video.get_scanline();
             let soundon = self.via.a_out.sound() > 0 && !self.via.b_out.sndenb();
             let soundbuf = self.soundbuf();
-            let pwm = soundbuf[scanline * 2 + 1];
+            let pwm = soundbuf[scanline * 2 + 1]; // TODO patched for testing
             let audiosample = if soundon { soundbuf[scanline * 2] } else { 0 };
 
             self.swim.push_pwm(pwm)?;
@@ -586,7 +746,29 @@ where
             }
             self.last_audiosample = audiosample;
         }
+        
+        self.swim.tick(1)?;
+        
+         */
 
+        // Legacy VBlank interrupt
+        if self.cycles % (CLOCK_SPEED / 60) == 0 {
+            self.via.ifr.set_vblank(true);
+
+            if self.speed == EmulatorSpeed::Video {
+                // Sync to 60 fps video
+                let frametime = self.vblank_time.elapsed().as_micros() as u64;
+                const DESIRED_FRAMETIME: u64 = 1_000_000 / 60;
+
+                self.vblank_time = Instant::now();
+
+                if frametime < DESIRED_FRAMETIME {
+                    thread::sleep(Duration::from_micros(DESIRED_FRAMETIME - frametime));
+                }
+            }
+        }
+
+        self.swim.intdrive = self.via.a_out.drivesel();
         self.swim.tick(1)?;
 
         Ok(1)

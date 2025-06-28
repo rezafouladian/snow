@@ -89,7 +89,7 @@ where
     T: Renderer,
 {
     /// Visible dots in one scanline
-    const H_VISIBLE_DOTS: usize = 512;
+    const H_VISIBLE_DOTS: usize = 640; // TODO patched for testing
 
     /// Length of HBlank, in dots.
     const HBLANK_DOTS: usize = 192;
@@ -98,7 +98,7 @@ where
     const H_DOTS: usize = Self::H_VISIBLE_DOTS + Self::HBLANK_DOTS;
 
     /// Visible lines in one frame
-    const V_VISIBLE_LINES: usize = 342;
+    const V_VISIBLE_LINES: usize = 400; //TODO patched for testing
 
     /// Length of VBlank, in lines.
     const VBLANK_LINES: usize = 28;

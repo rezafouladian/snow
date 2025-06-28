@@ -221,6 +221,7 @@ impl Emulator {
             | MacModel::Plus
             | MacModel::SE
             | MacModel::SeFdhd
+            | MacModel::Portable
             | MacModel::Classic => {
                 // Initialize bus and CPU
                 let bus = CompactMacBus::new(model, rom, renderer);
