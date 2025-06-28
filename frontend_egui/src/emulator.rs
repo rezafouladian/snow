@@ -12,7 +12,7 @@ use eframe::egui;
 use log::*;
 use num_traits::cast::ToPrimitive;
 use sdl2::audio::AudioDevice;
-
+use serde::{Deserialize, Serialize};
 use snow_core::bus::Address;
 use snow_core::cpu_m68k::cpu::{HistoryEntry, SystrapHistoryEntry};
 use snow_core::cpu_m68k::disassembler::{Disassembler, DisassemblyEntry};
@@ -26,7 +26,7 @@ use snow_core::emulator::comm::{EmulatorCommandSender, EmulatorEventReceiver, Em
 use snow_core::emulator::Emulator;
 use snow_core::keymap::Scancode;
 use snow_core::mac::scc::SccCh;
-use snow_core::mac::{ExtraROMs, MacModel};
+use snow_core::mac::{ExtraROMs, MacModel, MacMonitor};
 use snow_core::renderer::DisplayBuffer;
 use snow_core::tickable::{Tickable, Ticks};
 use snow_floppy::{Floppy, FloppyImage, FloppyType};
@@ -35,8 +35,22 @@ use crate::audio::SDLAudioSink;
 
 pub type DisassemblyListing = Vec<DisassemblyEntry>;
 
-pub struct EmulatorInitParams {
+/// Results of initializing the emulator, includes channels
+pub struct EmulatorInitResult {
     pub frame_receiver: Receiver<DisplayBuffer>,
+}
+
+/// Initialization arguments for the emulator, minus filenames
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct EmulatorInitArgs {
+    #[serde(default)]
+    pub audio_disabled: bool,
+
+    #[serde(default)]
+    pub monitor: Option<MacMonitor>,
+
+    #[serde(default)]
+    pub mouse_disabled: bool,
 }
 
 /// Manages the state of the emulator and feeds input to the GUI
@@ -48,7 +62,6 @@ pub struct EmulatorState {
     eventrecv: Option<EmulatorEventReceiver>,
     status: Option<EmulatorStatus>,
     audiosink: Option<AudioDevice<SDLAudioSink>>,
-    audio_enabled: bool,
     disasm_address: Address,
     disasm_code: DisassemblyListing,
     messages: VecDeque<(UserMessageType, String)>,
@@ -65,20 +78,15 @@ pub struct EmulatorState {
 }
 
 impl EmulatorState {
-    pub fn new(audio_enabled: bool) -> Self {
-        Self {
-            audio_enabled,
-            ..Default::default()
-        }
-    }
-
     pub fn init_from_rom(
         &mut self,
         filename: &Path,
         display_rom_path: Option<&Path>,
         disks: Option<[Option<PathBuf>; 7]>,
         test_rom_path: Option<&Path>,
-    ) -> Result<EmulatorInitParams> {
+        pram: Option<&Path>,
+        args: &EmulatorInitArgs,
+    ) -> Result<EmulatorInitResult> {
         let rom = std::fs::read(filename)?;
         let test_rom = if let Some(filename) = test_rom_path {
             Some(std::fs::read(filename)?)
@@ -90,7 +98,7 @@ impl EmulatorState {
         } else {
             None
         };
-        self.init(&rom, display_rom.as_deref(), disks, test_rom.as_deref())
+        self.init(&rom, display_rom.as_deref(), disks, test_rom.as_deref(), pram, args)
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -100,7 +108,9 @@ impl EmulatorState {
         display_rom: Option<&[u8]>,
         disks: Option<[Option<PathBuf>; 7]>,
         test_rom: Option<&[u8]>,
-    ) -> Result<EmulatorInitParams> {
+        pram: Option<&Path>,
+        args: &EmulatorInitArgs,
+    ) -> Result<EmulatorInitResult> {
         // Terminate running emulator (if any)
         self.deinit();
 
@@ -110,15 +120,15 @@ impl EmulatorState {
         let model =
             MacModel::detect_from_rom(rom).ok_or_else(|| anyhow!("Unsupported ROM file"))?;
         let (mut emulator, frame_recv) = if let Some(display_rom) = display_rom {
-            Emulator::new_with_extra_roms(rom, &[ExtraROMs::MDC12(display_rom)], model, test_rom)
+            Emulator::new_with_extra_roms(rom, &[ExtraROMs::MDC12(display_rom)], model, test_rom, args.monitor, !args.mouse_disabled,)
         } else {
-            Emulator::new(rom, model, test_rom)
+            Emulator::new(rom, model, test_rom, args.monitor, !args.mouse_disabled)
         }?;
 
         let cmd = emulator.create_cmd_sender();
 
         // Initialize audio
-        if !self.audio_enabled {
+        if args.audio_disabled {
             cmd.send(EmulatorCommand::SetSpeed(EmulatorSpeed::Video))?;
         } else if self.audiosink.is_none() {
             match SDLAudioSink::new(emulator.get_audio()) {
@@ -156,6 +166,10 @@ impl EmulatorState {
             }
         }
 
+        if let Some(pram_path) = pram {
+            emulator.persist_pram(pram_path);
+        }
+
         cmd.send(EmulatorCommand::Run)?;
 
         self.eventrecv = Some(emulator.create_event_recv());
@@ -177,7 +191,7 @@ impl EmulatorState {
         while !self.poll() {}
         while self.poll() {}
 
-        Ok(EmulatorInitParams {
+        Ok(EmulatorInitResult {
             frame_receiver: frame_recv,
         })
     }

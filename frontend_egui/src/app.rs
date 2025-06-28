@@ -16,6 +16,7 @@ use snow_core::bus::Address;
 use snow_floppy::loaders::{FloppyImageLoader, FloppyImageSaver, ImageType};
 
 use crate::dialogs::modelselect::{ModelSelectionDialog, ModelSelectionResult};
+use crate::emulator::EmulatorInitArgs;
 use anyhow::{bail, Result};
 use eframe::egui;
 use egui_file_dialog::{DialogMode, DirectoryEntry, FileDialog};
@@ -130,7 +131,6 @@ impl SnowGui {
         cc: &eframe::CreationContext<'_>,
         wev_recv: crossbeam_channel::Receiver<egui_winit::winit::event::WindowEvent>,
         initial_file: Option<String>,
-        audio_enabled: bool,
         zoom_factor: f32,
     ) -> Self {
         egui_material_icons::initialize(&cc.egui_ctx);
@@ -236,7 +236,7 @@ impl SnowGui {
             ui_active: true,
             last_running: false,
 
-            emu: EmulatorState::new(audio_enabled),
+            emu: EmulatorState::default(),
         };
 
         if let Some(filename) = initial_file {
@@ -252,7 +252,7 @@ impl SnowGui {
                 .unwrap_or_default()
                 .eq_ignore_ascii_case("rom")
             {
-                app.load_rom_from_path(path, None, None, None);
+                app.load_rom_from_path(path, None, None, None, None, &EmulatorInitArgs::default());
             }
         }
 
@@ -365,6 +365,8 @@ impl SnowGui {
         display_rom_path: Option<&Path>,
         disks: Option<[Option<PathBuf>; 7]>,
         test_rom_path: Option<&Path>,
+        pram_path: Option<&Path>,
+        args: &EmulatorInitArgs,
     ) {
         let test_rom_path = if let Some(path) = test_rom_path {
             if path.as_os_str().is_empty() {
@@ -375,12 +377,14 @@ impl SnowGui {
         } else {
             None
         };
-        match self.emu.init_from_rom(path, display_rom_path, disks, test_rom_path) {
+        match self.emu.init_from_rom(path, display_rom_path, disks, test_rom_path, pram_path, args) {
             Ok(p) => self.framebuffer.connect_receiver(p.frame_receiver),
             Err(e) => self.show_error(&format!("Failed to load ROM file: {}", e)),
         }
         self.workspace.set_rom_path(path);
         self.workspace.set_display_card_rom_path(display_rom_path);
+        self.workspace.set_pram_path(pram_path);
+        self.workspace.init_args = args.clone();
     }
 
     fn load_workspace(&mut self, path: Option<&Path>) {
@@ -408,7 +412,9 @@ impl SnowGui {
                 &rompath,
                 self.workspace.get_display_card_rom_path().as_deref(),
                 Some(self.workspace.get_disk_paths()),
-                Some(&*self.workspace.get_test_rom_path().unwrap())
+                Some(&*self.workspace.get_test_rom_path().unwrap()),
+                self.workspace.get_pram_path().as_deref(),
+                &self.workspace.init_args.clone(),
             );
         } else {
             self.emu.deinit();
@@ -513,6 +519,8 @@ impl SnowGui {
             result.display_rom_path.as_deref(),
             Some(self.emu.get_disk_paths()),
             result.test_rom_path.as_deref(),
+            result.pram_path.as_deref(),
+            &result.init_args,
         );
         self.last_running = false;
     }

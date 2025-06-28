@@ -3,11 +3,11 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
+use crate::emulator::EmulatorInitArgs;
+use crate::util::relativepath::RelativePath;
 use anyhow::{Context, Result};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
-
-use crate::util::relativepath::RelativePath;
 
 /// A workspace representation which contains:
 /// * (Paths to) loaded assets
@@ -40,12 +40,17 @@ pub struct Workspace {
     display_card_rom_path: Option<RelativePath>,
 
     test_rom_path: Option<RelativePath>,
+    /// Last specified PRAM path
+    pram_path: Option<RelativePath>,
 
     /// Last loaded disks
     disks: [Option<RelativePath>; 7],
 
     /// Window positions
     windows: HashMap<String, [f32; 4]>,
+
+    /// Last emulator initialization args
+    pub init_args: EmulatorInitArgs,
 }
 
 impl Default for Workspace {
@@ -66,8 +71,10 @@ impl Default for Workspace {
             rom_path: None,
             display_card_rom_path: None,
             test_rom_path: None,
+            pram_path: None,
             disks: core::array::from_fn(|_| None),
             windows: HashMap::new(),
+            init_args: EmulatorInitArgs::default(),
         }
     }
 }
@@ -98,6 +105,9 @@ impl Workspace {
         if let Some(p) = result.display_card_rom_path.as_mut() {
             p.after_deserialize(parent)?;
         }
+        if let Some(p) = result.pram_path.as_mut() {
+            p.after_deserialize(parent)?;
+        }
         for d in &mut result.disks {
             if let Some(p) = d.as_mut() {
                 p.after_deserialize(parent)?;
@@ -113,6 +123,9 @@ impl Workspace {
             p.before_serialize(parent)?;
         }
         if let Some(p) = self.display_card_rom_path.as_mut() {
+            p.before_serialize(parent)?;
+        }
+        if let Some(p) = self.pram_path.as_mut() {
             p.before_serialize(parent)?;
         }
         for d in &mut self.disks {
@@ -156,6 +169,12 @@ impl Workspace {
 
     pub fn get_test_rom_path(&self) -> Option<PathBuf> {
         self.test_rom_path.clone().map(|d| d.get_absolute())
+    pub fn set_pram_path(&mut self, p: Option<&Path>) {
+        self.pram_path = p.map(RelativePath::from_absolute);
+    }
+
+    pub fn get_pram_path(&self) -> Option<PathBuf> {
+        self.pram_path.clone().map(|d| d.get_absolute())
     }
 
     /// Persists a window location

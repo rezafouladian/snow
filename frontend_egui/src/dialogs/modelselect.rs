@@ -1,11 +1,12 @@
 use std::fs;
 use std::path::PathBuf;
 
+use crate::emulator::EmulatorInitArgs;
 use anyhow::{anyhow, bail, Result};
 use eframe::egui;
 use egui_file_dialog::FileDialog;
 use sha2::{Digest, Sha256};
-use snow_core::mac::MacModel;
+use snow_core::mac::{MacModel, MacMonitor};
 use strum::IntoEnumIterator;
 
 /// Dialog for selecting Macintosh model and associated ROMs
@@ -13,6 +14,8 @@ pub struct ModelSelectionDialog {
     open: bool,
     selected_model: MacModel,
     memory_size: usize,
+    init_args: EmulatorInitArgs,
+    selected_monitor: MacMonitor,
 
     // Main ROM selection
     main_rom_path: String,
@@ -30,6 +33,11 @@ pub struct ModelSelectionDialog {
     display_rom_dialog: FileDialog,
     display_rom_required: bool,
 
+    // PRAM path
+    pram_enabled: bool,
+    pram_path: String,
+    pram_dialog: FileDialog,
+
     // Result
     result: Option<ModelSelectionResult>,
 
@@ -44,6 +52,8 @@ pub struct ModelSelectionResult {
     pub main_rom_path: PathBuf,
     pub test_rom_path: Option<PathBuf>,
     pub display_rom_path: Option<PathBuf>,
+    pub pram_path: Option<PathBuf>,
+    pub init_args: EmulatorInitArgs,
 }
 
 impl Default for ModelSelectionDialog {
@@ -52,6 +62,9 @@ impl Default for ModelSelectionDialog {
             open: false,
             selected_model: MacModel::Plus,
             memory_size: 4 * 1024 * 1024, // 4MB default
+            init_args: Default::default(),
+            selected_monitor: MacMonitor::default(),
+
             main_rom_path: String::new(),
             main_rom_valid: false,
             main_rom_dialog: FileDialog::new()
@@ -101,6 +114,14 @@ impl Default for ModelSelectionDialog {
                 .default_file_filter("ROM files (*.rom, *.bin)")
                 .opening_mode(egui_file_dialog::OpeningMode::LastVisitedDir),
             display_rom_required: false,
+
+            pram_enabled: false,
+            pram_dialog: FileDialog::new()
+                .add_save_extension("PRAM files", "pram")
+                .default_save_extension("PRAM files")
+                .opening_mode(egui_file_dialog::OpeningMode::LastVisitedDir),
+            pram_path: String::new(),
+
             result: None,
             error_message: String::new(),
         }
@@ -118,6 +139,8 @@ impl ModelSelectionDialog {
         self.display_rom_valid = false;
         self.update_memory_options();
         self.update_display_rom_requirement();
+        self.do_validate_main_rom();
+        self.do_validate_display_rom();
     }
 
     pub fn is_open(&self) -> bool {
@@ -261,10 +284,12 @@ impl ModelSelectionDialog {
         self.main_rom_dialog.update(ctx);
         self.test_rom_dialog.update(ctx);
         self.display_rom_dialog.update(ctx);
+        self.pram_dialog.update(ctx);
 
         if self.main_rom_dialog.state() == egui_file_dialog::DialogState::Open
             || self.test_rom_dialog.state() == egui_file_dialog::DialogState::Open
             || self.display_rom_dialog.state() == egui_file_dialog::DialogState::Open
+            || self.pram_dialog.state() == egui_file_dialog::DialogState::Open
         {
             return;
         }
@@ -297,6 +322,10 @@ impl ModelSelectionDialog {
             {
                 self.error_message.clear();
             }
+        }
+
+        if let Some(path) = self.pram_dialog.take_picked() {
+            self.pram_path = path.to_string_lossy().to_string();
         }
 
         // Main dialog window
@@ -343,17 +372,13 @@ impl ModelSelectionDialog {
             ui.label(egui::RichText::from("Select ROM files").strong());
             egui::Grid::new("model_grid_2").show(ui, |ui| {
                 // Main ROM selection
-                ui.label(egui::RichText::new("System ROM"));
+                ui.label("System ROM");
                 ui.horizontal(|ui| {
                     if ui
                         .text_edit_singleline(&mut self.main_rom_path)
                         .lost_focus()
                     {
-                        if let Err(e) = self.validate_main_rom() {
-                            self.error_message = e.to_string();
-                        } else {
-                            self.error_message.clear();
-                        }
+                        self.do_validate_main_rom();
                     }
                     if ui.button("Browse...").clicked() {
                         self.main_rom_dialog.pick_file();
@@ -401,21 +426,13 @@ impl ModelSelectionDialog {
 
                 // Display Card ROM selection (Mac II only)
                 if self.display_rom_required {
-                    ui.label(egui::RichText::new(
-                        "Macintosh Display Card 8-24 ROM (341-0868)",
-                    ));
+                    ui.label("Macintosh Display Card 8-24 ROM (341-0868)");
                     ui.horizontal(|ui| {
                         if ui
                             .text_edit_singleline(&mut self.display_rom_path)
                             .lost_focus()
                         {
-                            if let Err(e) = self.validate_display_rom() {
-                                self.error_message = e.to_string();
-                            } else if !self.main_rom_path.is_empty()
-                                && self.error_message.starts_with("Invalid Display Card")
-                            {
-                                self.error_message.clear();
-                            }
+                            self.do_validate_display_rom();
                         }
                         if ui.button("Browse...").clicked() {
                             self.display_rom_dialog.pick_file();
@@ -440,7 +457,46 @@ impl ModelSelectionDialog {
                         ui.label("");
                     }
                     ui.end_row();
+
+                    ui.label(egui::RichText::from("Select peripherals").strong());
+                    ui.end_row();
+
+                    ui.label("Monitor");
+                    egui::ComboBox::new(egui::Id::new("Select monitor"), "")
+                        .selected_text(format!("{}", self.selected_monitor))
+                        .show_ui(ui, |ui| {
+                            for monitor in MacMonitor::iter() {
+                                ui.selectable_value(
+                                    &mut self.selected_monitor,
+                                    monitor,
+                                    monitor.to_string(),
+                                );
+                            }
+                        });
+                    ui.end_row();
                 }
+            });
+
+            ui.collapsing("Advanced", |ui| {
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.pram_enabled, "Persist PRAM");
+                        if self.pram_enabled {
+                            ui.horizontal(|ui| {
+                                ui.text_edit_singleline(&mut self.pram_path);
+                                if ui.button("Browse...").clicked() {
+                                    self.pram_dialog.save_file();
+                                }
+                            });
+                        }
+                    });
+                });
+                ui.group(|ui| {
+                    ui.vertical(|ui| {
+                        ui.checkbox(&mut self.init_args.audio_disabled, "Disable audio");
+                        ui.checkbox(&mut self.init_args.mouse_disabled, "Disable mouse");
+                    });
+                });
             });
 
             // Error message
@@ -484,6 +540,19 @@ impl ModelSelectionDialog {
                             } else {
                                 None
                             },
+                            pram_path: if self.pram_path.is_empty() {
+                                None
+                            } else {
+                                Some(PathBuf::from(&self.pram_path))
+                            },
+                            init_args: EmulatorInitArgs {
+                                monitor: if self.display_rom_required {
+                                    Some(self.selected_monitor)
+                                } else {
+                                    None
+                                },
+                                ..self.init_args
+                            },
                         });
                         self.open = false;
                     }
@@ -506,6 +575,24 @@ impl ModelSelectionDialog {
                     self.error_message.clear();
                 }
             }
+        }
+    }
+
+    fn do_validate_main_rom(&mut self) {
+        if let Err(e) = self.validate_main_rom() {
+            self.error_message = e.to_string();
+        } else {
+            self.error_message.clear();
+        }
+    }
+
+    fn do_validate_display_rom(&mut self) {
+        if let Err(e) = self.validate_display_rom() {
+            self.error_message = e.to_string();
+        } else if !self.main_rom_path.is_empty()
+            && self.error_message.starts_with("Invalid Display Card")
+        {
+            self.error_message.clear();
         }
     }
 }

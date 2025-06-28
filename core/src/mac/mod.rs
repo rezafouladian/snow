@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use hex_literal::hex;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use swim::drive::DriveType;
@@ -180,7 +181,9 @@ impl MacModel {
         // Macintosh Plus v2
     digest[..] == hex!("06f598ff0f64c944e7c347ba55ae60c792824c09c74f4a55a32c0141bf91b8b3") ||
         // Macintosh Plus v3
-    digest[..] == hex!("dd908e2b65772a6b1f0c859c24e9a0d3dcde17b1c6a24f4abd8955846d7895e7")
+    digest[..] == hex!("dd908e2b65772a6b1f0c859c24e9a0d3dcde17b1c6a24f4abd8955846d7895e7") ||
+        // Macintosh Plus Japanese ROM
+    digest[..] == hex!("969269ced56dcb76402f2bc32e4d41343b5af00e5ad828e6f08098d5e4b1ad05")
         {
             Some(Self::Plus)
         } else if digest[..]
@@ -251,16 +254,45 @@ pub enum ExtraROMs<'a> {
 }
 
 /// Definitions of Macintosh monitors
-#[derive(Clone, Copy, strum::IntoStaticStr)]
+#[derive(
+    Clone,
+    Copy,
+    strum::IntoStaticStr,
+    Default,
+    Serialize,
+    Deserialize,
+    Debug,
+    strum::EnumIter,
+    Eq,
+    PartialEq,
+)]
 pub enum MacMonitor {
     /// Macintosh 12" RGB monitor
     RGB12,
     /// Macintosh 14" high-res
+    #[default]
     HiRes14,
-    /// Macintosh 21" RGB monitor (1152x870)
-    RGB21,
     /// Macintosh 19" RGB monitor (1024x768)
     RGB19,
+    /// Macintosh 21" RGB monitor (1152x870)
+    RGB21,
+}
+
+impl Display for MacMonitor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} ({}x{})",
+            match self {
+                Self::RGB12 => "Macintosh 12\" RGB monitor",
+                Self::HiRes14 => "Macintosh 14\" high-resolution",
+                Self::RGB21 => "Macintosh 21\" RGB monitor",
+                Self::RGB19 => "Macintosh 19\" RGB monitor",
+            },
+            self.width(),
+            self.height()
+        )
+    }
 }
 
 impl MacMonitor {

@@ -17,7 +17,7 @@ use crate::mac::adb::{AdbKeyboard, AdbMouse};
 use crate::mac::compact::bus::{CompactMacBus, RAM_DIRTY_PAGESIZE};
 use crate::mac::macii::bus::MacIIBus;
 use crate::mac::scc::Scc;
-use crate::mac::{ExtraROMs, MacModel};
+use crate::mac::{ExtraROMs, MacModel, MacMonitor};
 use crate::renderer::channel::ChannelRenderer;
 use crate::renderer::AudioReceiver;
 use crate::renderer::{DisplayBuffer, Renderer};
@@ -30,6 +30,7 @@ use log::*;
 
 use crate::cpu_m68k::regs::{Register, RegisterFile};
 use crate::emulator::comm::{EmulatorSpeed, UserMessageType};
+use crate::mac::rtc::Rtc;
 use crate::mac::scsi::ScsiController;
 use crate::mac::swim::Swim;
 use comm::{
@@ -178,6 +179,13 @@ impl EmulatorConfig {
             Self::MacII(_) => unreachable!(), // MacII uses ADB, not direct keyboard events
         }
     }
+
+    pub fn rtc_mut(&mut self) -> &mut Rtc {
+        match self {
+            Self::Compact(cpu) => &mut cpu.bus.via.rtc,
+            Self::MacII(cpu) => &mut cpu.bus.via1.rtc,
+        }
+    }
 }
 
 /// Emulator runner
@@ -203,13 +211,15 @@ impl Emulator {
         model: MacModel,
         test_rom: Option<&[u8]>,
     ) -> Result<(Self, crossbeam_channel::Receiver<DisplayBuffer>)> {
-        Self::new_with_extra_roms(rom, &[], model, test_rom)
+        Self::new_with_extra_roms(rom, &[], model, test_rom, None, true)
     }
-    pub fn new_with_extra_roms(
+    pub fn new_with_extra(
         rom: &[u8],
         extra_roms: &[ExtraROMs],
         model: MacModel,
         test_rom: Option<&[u8]>,
+        monitor: Option<MacMonitor>,
+        mouse_enabled: bool,
     ) -> Result<(Self, crossbeam_channel::Receiver<DisplayBuffer>)> {
         // Set up channels
         let (cmds, cmdr) = crossbeam_channel::unbounded();
@@ -225,7 +235,7 @@ impl Emulator {
             | MacModel::SeFdhd
             | MacModel::Classic => {
                 // Initialize bus and CPU
-                let bus = CompactMacBus::new(model, rom, test_rom, renderer);
+                let bus = CompactMacBus::new(model, rom, test_rom, renderer, mouse_enabled);
                 let mut cpu = Box::new(CpuM68000::new(bus));
                 assert_eq!(cpu.get_type(), model.cpu_type());
 
@@ -260,7 +270,7 @@ impl Emulator {
                 };
 
                 // Initialize bus and CPU
-                let bus = MacIIBus::new(model, rom, test_rom, mdcrom, vec![renderer]);
+                let bus = MacIIBus::new(model, rom, test_rom, mdcrom, vec![renderer]), monitor.unwrap_or_default(), mouse_enabled;
                 let mut cpu = Box::new(CpuM68020::new(bus));
                 assert_eq!(cpu.get_type(), model.cpu_type());
 
@@ -287,11 +297,6 @@ impl Emulator {
                 )
             }
         };
-        // Initialize RTC
-        //cpu.bus
-        //    .via
-        //    .rtc
-        //    .load_pram(&format!("{:?}.pram", model).to_ascii_lowercase());
 
         let mut emu = Self {
             config,
@@ -311,6 +316,12 @@ impl Emulator {
         emu.status_update()?;
 
         Ok((emu, frame_recv))
+    }
+
+    /// Sets a path to persist the PRAM in. If the file exists, it is loaded. Otherwise, an empty
+    /// file is created. The PRAM file is continuously updated.
+    pub fn persist_pram(&mut self, pram_path: &Path) {
+        self.config.rtc_mut().load_pram(pram_path);
     }
 
     pub fn create_cmd_sender(&self) -> EmulatorCommandSender {
