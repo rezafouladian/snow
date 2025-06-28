@@ -208,7 +208,18 @@ impl ModelSelectionDialog {
     }
     
     fn validate_test_rom(&mut self) -> Result<()> {
-        Ok(())
+        if self.test_rom_path.is_empty() {
+            self.test_rom_valid = true;
+            return Ok(())
+        }
+        
+        let rom_data = fs::read(&self.test_rom_path)?;
+
+        if rom_data.len() > 0x20000 {
+            bail!("Test ROM is too large. Max size is 128KB (131072 bytes).");
+        } else {
+            Ok(())
+        }
     }
 
     fn validate_display_rom(&mut self) -> Result<()> {
