@@ -260,7 +260,7 @@ impl Emulator {
                 };
 
                 // Initialize bus and CPU
-                let bus = MacIIBus::new(model, rom, mdcrom, vec![renderer]);
+                let bus = MacIIBus::new(model, rom, test_rom, mdcrom, vec![renderer]);
                 let mut cpu = Box::new(CpuM68020::new(bus));
                 assert_eq!(cpu.get_type(), model.cpu_type());
 

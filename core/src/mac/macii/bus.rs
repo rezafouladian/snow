@@ -38,6 +38,7 @@ pub struct MacIIBus<TRenderer: Renderer> {
 
     rom: Vec<u8>,
     pub(crate) ram: Vec<u8>,
+    test_rom: Vec<u8>,
 
     /// RAM pages (RAM_DIRTY_PAGESIZE bytes) written
     pub(crate) ram_dirty: BitSet,
@@ -85,7 +86,7 @@ where
     /// CrsrNew address
     const ADDR_CRSRNEW: Address = 0x08CE;
 
-    pub fn new(model: MacModel, rom: &[u8], mdcrom: &[u8], mut renderers: Vec<TRenderer>) -> Self {
+    pub fn new(model: MacModel, rom: &[u8], test_rom: Option<&[u8]>, mdcrom: &[u8], mut renderers: Vec<TRenderer>) -> Self {
         let ram_size = model.ram_size();
 
         let mut bus = Self {
@@ -95,6 +96,7 @@ where
 
             rom: Vec::from(rom),
             ram: vec![0; ram_size],
+            test_rom: Vec::from(test_rom.unwrap_or(&[])),
             ram_dirty: BitSet::from_iter(0..(ram_size / RAM_DIRTY_PAGESIZE)),
             via1: Via::new(model),
             via2: Via2::new(model),
@@ -268,6 +270,9 @@ where
                 //0x0001_8000..=0x0001_FFFF => Some(0xFF),
                 _ => None,
             },
+            0x5800_0000..0x5801_FFFF => {
+                Some(*self.test_rom.get(addr as usize & self.rom_mask).unwrap_or(&0xFF))
+            }
             // NuBus super slot
             0x6000_0000..=0xEFFF_FFFF => None,
             // NuBus standard slot
@@ -377,7 +382,9 @@ where
             0xC0_0000..=0xCF_FFFF => 0xFC00_0000 | (addr & 0xF_FFFF),
             0xD0_0000..=0xDF_FFFF => 0xFD00_0000 | (addr & 0xF_FFFF),
             0xE0_0000..=0xEF_FFFF => 0xFE00_0000 | (addr & 0xF_FFFF),
-            0xF0_0000..=0xFF_FFFF => 0x5000_0000 | (addr & 0xF_FFFF),
+            0xF0_0000..=0xF7_FFFF => 0x5000_0000 | (addr & 0xF_FFFF),
+            0xF8_0000..=0xF9_FFFF => 0x5800_0000 | (addr & 0x1_FFFF),
+            0xFA_0000..=0xFF_FFFF => 0x5000_0000 | (addr & 0xF_FFFF),
             _ => unreachable!(),
         }
     }
