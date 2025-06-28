@@ -57,7 +57,7 @@ impl MacModel {
         match self {
             Self::Early128K => 128 * 1024,
             Self::Early512K => 512 * 1024,
-            Self::Plus | Self::SE | Self::SeFdhd | Self::Classic => 4096 * 1024,
+            Self::Plus | Self::SE | Self::SeFdhd | Self::Classic => 8192 * 1024,
             Self::MacII | Self::MacIIFDHD => 8 * 1024 * 1024,
         }
     }
@@ -133,7 +133,7 @@ impl MacModel {
             | Self::Plus
             | Self::SE
             | Self::SeFdhd
-            | Self::Classic => 512,
+            | Self::Classic => 640,
             Self::MacII | Self::MacIIFDHD => 640,
         }
     }
@@ -145,7 +145,7 @@ impl MacModel {
             | Self::Plus
             | Self::SE
             | Self::SeFdhd
-            | Self::Classic => 342,
+            | Self::Classic => 400,
             Self::MacII | Self::MacIIFDHD => 480,
         }
     }

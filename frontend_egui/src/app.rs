@@ -383,6 +383,7 @@ impl SnowGui {
         }
         self.workspace.set_rom_path(path);
         self.workspace.set_display_card_rom_path(display_rom_path);
+        self.workspace.set_test_rom_path(test_rom_path.unwrap());
         self.workspace.set_pram_path(pram_path);
         self.workspace.init_args = args.clone();
     }

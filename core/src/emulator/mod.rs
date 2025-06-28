@@ -211,7 +211,7 @@ impl Emulator {
         model: MacModel,
         test_rom: Option<&[u8]>,
     ) -> Result<(Self, crossbeam_channel::Receiver<DisplayBuffer>)> {
-        Self::new_with_extra_roms(rom, &[], model, test_rom, None, true)
+        Self::new_with_extra(rom, &[], model, test_rom, None, true)
     }
     pub fn new_with_extra(
         rom: &[u8],
@@ -270,7 +270,7 @@ impl Emulator {
                 };
 
                 // Initialize bus and CPU
-                let bus = MacIIBus::new(model, rom, test_rom, mdcrom, vec![renderer]), monitor.unwrap_or_default(), mouse_enabled;
+                let bus = MacIIBus::new(model, rom, test_rom, mdcrom, vec![renderer], monitor.unwrap_or_default(), mouse_enabled);
                 let mut cpu = Box::new(CpuM68020::new(bus));
                 assert_eq!(cpu.get_type(), model.cpu_type());
 

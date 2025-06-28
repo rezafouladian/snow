@@ -169,6 +169,7 @@ impl Workspace {
 
     pub fn get_test_rom_path(&self) -> Option<PathBuf> {
         self.test_rom_path.clone().map(|d| d.get_absolute())
+    }
     pub fn set_pram_path(&mut self, p: Option<&Path>) {
         self.pram_path = p.map(RelativePath::from_absolute);
     }

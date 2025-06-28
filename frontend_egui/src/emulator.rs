@@ -120,9 +120,9 @@ impl EmulatorState {
         let model =
             MacModel::detect_from_rom(rom).ok_or_else(|| anyhow!("Unsupported ROM file"))?;
         let (mut emulator, frame_recv) = if let Some(display_rom) = display_rom {
-            Emulator::new_with_extra_roms(rom, &[ExtraROMs::MDC12(display_rom)], model, test_rom, args.monitor, !args.mouse_disabled,)
+            Emulator::new_with_extra(rom, &[ExtraROMs::MDC12(display_rom)], model, test_rom, args.monitor, !args.mouse_disabled,)
         } else {
-            Emulator::new(rom, model, test_rom, args.monitor, !args.mouse_disabled)
+            Emulator::new(rom, model, test_rom)
         }?;
 
         let cmd = emulator.create_cmd_sender();

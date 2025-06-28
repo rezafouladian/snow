@@ -238,6 +238,7 @@ where
             0x0000_0000..=0x003F_FFFF => {
                 // Duplicate framebuffers to video component
                 // (writes also go through RAM)
+                /*
                 if self.fb_main.contains(&(addr & self.ram_mask as Address)) {
                     let offset = ((addr & self.ram_mask as Address) - self.fb_main.start) as usize;
                     self.video.framebuffers[0][offset] = val;
@@ -246,11 +247,23 @@ where
                     let offset = ((addr & self.ram_mask as Address) - self.fb_alt.start) as usize;
                     self.video.framebuffers[1][offset] = val;
                 }
+                 */
 
                 let idx = addr as usize & self.ram_mask;
                 self.ram_dirty.insert(idx / RAM_DIRTY_PAGESIZE);
                 Some(self.ram[idx] = val)
             }
+            0x0070_0000..=0x0070_7FFF => {
+                if addr < 0x0070_7D00 {
+                    let new_addr = addr & 0xFFFF;
+                    let offset = (new_addr & self.ram_mask as Address) as usize;
+                    self.video.framebuffers[0][offset] = val;
+                    self.video.framebuffers[1][offset] = val;
+                }
+                let idx = addr as usize & self.ram_mask;
+                self.ram_dirty.insert(idx / RAM_DIRTY_PAGESIZE);
+                Some(self.ram[idx] = val)
+            },
             // SCSI
             0x0058_0000..=0x005F_FFFF => self.scsi.write(addr, val),
             // SCC
@@ -270,11 +283,11 @@ where
     fn read_overlay(&mut self, addr: Address) -> Option<Byte> {
         let result = match addr {
             // ROM
-            0x0000_0000..=0x000F_FFFF | 0x0020_0000..=0x002F_FFFF | 0x0040_0000..=0x004F_FFFF => {
+            0x0000_0000..=0x000F_FFFF | 0x0020_0000..=0x002F_FFFF => {
                 Some(*self.rom.get(addr as usize & self.rom_mask).unwrap_or(&0xFF))
             }
             // Overlay flip for Mac SE+
-            0x0040_0000..=0x005F_FFFF if self.model >= MacModel::SE => {
+            0x0040_0000..=0x004F_FFFF => {
                 self.overlay = false;
                 self.read_normal(addr)
             }
@@ -310,6 +323,7 @@ where
         let result = match addr {
             // RAM
             0x0000_0000..=0x003F_FFFF => Some(self.ram[addr as usize & self.ram_mask]),
+            0x0070_0000..=0x0070_7FFF => Some(self.ram[addr as usize & self.ram_mask]),
             // ROM
             0x0040_0000..=0x0043_FFFF => {
                 Some(*self.rom.get(addr as usize & self.rom_mask).unwrap_or(&0xFF))
