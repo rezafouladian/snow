@@ -37,6 +37,7 @@ pub struct CompactMacBus<TRenderer: Renderer> {
 
     rom: Vec<u8>,
     pub(crate) ram: Vec<u8>,
+    vram: Vec<u8>,
 
     /// RAM pages (RAM_DIRTY_PAGESIZE bytes) written
     pub(crate) ram_dirty: BitSet,
@@ -124,6 +125,7 @@ where
 
             rom: Vec::from(rom),
             ram: vec![0; ram_size],
+            vram: vec![0; 32768],
             ram_dirty: BitSet::from_iter(0..(ram_size / RAM_DIRTY_PAGESIZE)),
             via: Via::new(model),
             video: Video::new(renderer),
@@ -301,20 +303,13 @@ where
         match addr {
             // RAM
             0x0000_0000..=0x008F_FFFF => {
-                // Duplicate framebuffers to video component
-                // (writes also go through RAM)
-                if self.fb_main.contains(&(addr & self.ram_mask as Address)) {
-                    let offset = ((addr & self.ram_mask as Address) - self.fb_main.start) as usize;
-                    self.video.framebuffers[0][offset] = val;
+                if self.model.ram_size() < addr as usize {
+                    None
+                } else {
+                    let idx = addr as usize & self.ram_mask;
+                    self.ram_dirty.insert(idx / RAM_DIRTY_PAGESIZE);
+                    Some(self.ram[idx] = val)
                 }
-                if self.fb_alt.contains(&(addr & self.ram_mask as Address)) {
-                    let offset = ((addr & self.ram_mask as Address) - self.fb_alt.start) as usize;
-                    self.video.framebuffers[1][offset] = val;
-                }
-
-                let idx = addr as usize & self.ram_mask;
-                self.ram_dirty.insert(idx / RAM_DIRTY_PAGESIZE);
-                Some(self.ram[idx] = val)
             }
             // SCSI
             0x00F9_0000..=0x00F9_FFFF => self.scsi.write(addr, val),
@@ -333,6 +328,7 @@ where
                 let offset = (addr & 0x7FFF as Address) as usize;
                 self.video.framebuffers[0][offset] = val;
                 self.video.framebuffers[1][offset] = val;
+                self.vram[offset] = val;
                 
                 Some(())
             },
@@ -440,8 +436,10 @@ where
             // Test software region (ignore)
             0x00F8_0000..=0x00F8_FFFF => Some(0xFF),
             // Video
-            0x00FA_0000..=0x00FA_FFFF => 
-                Some(0xFF),
+            0x00FA_0000..=0x00FA_FFFF => {
+                let offset = (addr & 0x7FFF as Address) as usize;
+                Some(self.vram[offset])
+            },
             _ => None,
         };
         if self.trace && !(0x0000_0000..=0x007F_FFFF).contains(&addr) {
@@ -454,7 +452,13 @@ where
     fn read_normal_portable(&mut self, addr: Address) -> Option<Byte> {
         let result = match addr {
             // RAM
-            0x0000_0000..=0x008F_FFFF => Some(self.ram[addr as usize & self.ram_mask]),
+            0x0000_0000..=0x008F_FFFF => {
+                if self.model.ram_size() < addr as usize {
+                    None
+                } else {
+                    Some(self.ram[addr as usize & self.ram_mask])
+                }
+            },
             // TODO: SLIM cards
             // ROM
             0x0090_0000..=0x009F_FFFF => {
@@ -470,8 +474,13 @@ where
             0x00F7_0000..=0x00F7_FFFF => self.via.read(addr),
             // Test software region (ignore)
             0x00F8_0000..=0x00F8_FFFF => Some(0xFF),
+            // TODO
             0x00FE_0000..=0x00FE_FFFF => Some(0xFF),
-
+            // Video
+            0x00FA_0000..=0x00FA_FFFF => {
+                let offset = (addr & 0x7FFF as Address) as usize;
+                Some(self.vram[offset])
+            },
             _ => None,
         };
 
