@@ -601,8 +601,10 @@ where
             let scanline = self.video.get_scanline();
             let soundon = self.via.a_out.sound() > 0 && !self.via.b_out.sndenb();
             let soundbuf = self.soundbuf();
-            let pwm = soundbuf[scanline * 2 + 1];
-            let audiosample = if soundon { soundbuf[scanline * 2] } else { 0 };
+            // let pwm = soundbuf[scanline * 2 + 1];
+            let pwm = soundbuf[scanline * 1 + 1]; // TODO modified for testing
+            // let audiosample = if soundon { soundbuf[scanline * 2] } else { 0 };
+            let audiosample = if soundon { soundbuf[scanline * 1] } else { 0 }; // TODO modified for testing
 
             self.swim.push_pwm(pwm)?;
 
