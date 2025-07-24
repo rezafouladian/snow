@@ -15,6 +15,7 @@ use crate::debuggable::{Debuggable, DebuggableProperties};
 use crate::keymap::{KeyEvent, Keymap};
 use crate::mac::adb::{AdbKeyboard, AdbMouse};
 use crate::mac::compact::bus::{CompactMacBus, RAM_DIRTY_PAGESIZE};
+use crate::mac::portable::bus::MacPortableBus;
 use crate::mac::macii::bus::MacIIBus;
 use crate::mac::scc::Scc;
 use crate::mac::scsi::target::ScsiTargetEvent;
@@ -25,7 +26,7 @@ use crate::renderer::{DisplayBuffer, Renderer};
 use crate::tickable::{Tickable, Ticks};
 use crate::types::{Byte, ClickEventSender, KeyEventSender};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use bit_set::BitSet;
 use log::*;
 
@@ -68,6 +69,7 @@ macro_rules! dispatch {
                 pub fn $ref_method(&self) -> $ref_ret {
                     match self {
                         Self::Compact(inner) => &inner.$($ref_target)*,
+                        Self::Portable(inner) => &inner.$($ref_target)*,
                         Self::MacII(inner) => &inner.$($ref_target)*,
                     }
                 }
@@ -78,6 +80,7 @@ macro_rules! dispatch {
                 pub fn $mut_ref_method(&mut self) -> $mut_ref_ret {
                     match self {
                         Self::Compact(inner) => &mut inner.$($mut_ref_target)*,
+                        Self::Portable(inner) => &mut inner.$($mut_ref_target)*,
                         Self::MacII(inner) => &mut inner.$($mut_ref_target)*,
                     }
                 }
@@ -88,6 +91,7 @@ macro_rules! dispatch {
                 pub fn $immut_call_method(&self $(, $immut_arg: $immut_arg_ty)*) -> $immut_call_ret {
                     match self {
                         Self::Compact(inner) => inner.$($immut_call_target)*,
+                        Self::Portable(inner) => inner.$($immut_call_target)*,
                         Self::MacII(inner) => inner.$($immut_call_target)*,
                     }
                 }
@@ -98,6 +102,7 @@ macro_rules! dispatch {
                 pub fn $mut_call_method(&mut self $(, $mut_arg: $mut_arg_ty)*) -> $mut_call_ret {
                     match self {
                         Self::Compact(inner) => inner.$($mut_call_target)*,
+                        Self::Portable(inner) => inner.$($mut_call_target)*,
                         Self::MacII(inner) => inner.$($mut_call_target)*,
                     }
                 }
@@ -111,6 +116,8 @@ macro_rules! dispatch {
 enum EmulatorConfig {
     /// Compact series - Mac 128K, 512K, Plus, SE, Classic
     Compact(Box<CpuM68000<CompactMacBus<ChannelRenderer>>>),
+    /// Portable
+    Portable(Box<CpuM68000<MacPortableBus<ChannelRenderer>>>),
     /// Macintosh II
     MacII(Box<CpuM68020<MacIIBus<ChannelRenderer>>>),
 }
@@ -177,6 +184,7 @@ impl EmulatorConfig {
     pub fn keyboard_event(&mut self, ev: KeyEvent) -> Result<()> {
         match self {
             Self::Compact(cpu) => cpu.bus.via.keyboard.event(ev),
+            Self::Portable(_) => Ok(()),
             Self::MacII(_) => unreachable!(), // MacII uses ADB, not direct keyboard events
         }
     }
@@ -184,6 +192,7 @@ impl EmulatorConfig {
     pub fn rtc_mut(&mut self) -> &mut Rtc {
         match self {
             Self::Compact(cpu) => &mut cpu.bus.via.rtc,
+            Self::Portable(cpu) => unreachable!(),
             Self::MacII(cpu) => &mut cpu.bus.via1.rtc,
         }
     }
@@ -265,6 +274,25 @@ impl Emulator {
                     EmulatorConfig::Compact(cpu),
                     adbkeyboard_sender,
                     adbmouse_sender,
+                )
+            }
+            MacModel::Portable => {
+                // Find extension ROM if present
+                let extension_rom = extra_roms.iter().find_map(|p| match p {
+                    ExtraROMs::ExtensionROM(data) => Some(*data),
+                    _ => None,
+                });
+
+                // Initialize bus and CPU
+                let bus = MacPortableBus::new(model, rom, extension_rom, renderer, mouse_enabled);
+                let mut cpu = Box::new(CpuM68000::new(bus));
+                assert_eq!(cpu.get_type(), model.cpu_type());
+
+                cpu.reset()?;
+                (
+                    EmulatorConfig::Portable(cpu),
+                    None,
+                    None,
                 )
             }
             MacModel::MacII | MacModel::MacIIFDHD => {

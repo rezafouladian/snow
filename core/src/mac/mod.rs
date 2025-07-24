@@ -21,6 +21,7 @@ pub mod scc;
 pub mod scsi;
 pub mod swim;
 pub mod via;
+pub(crate) mod portable;
 
 /// Differentiation of Macintosh models and their features
 #[derive(
@@ -41,6 +42,8 @@ pub enum MacModel {
     SeFdhd,
     /// Macintosh Classic
     Classic,
+    /// Macintosh Portable
+    Portable,
     /// Macintosh II
     MacII,
     /// Macintosh II FDHD
@@ -69,6 +72,8 @@ impl MacModel {
         ("bb0cb4786e2e004b701dda9bec475598bc82a4f27eb7b11e6b78dfcee1434f71", &[Self::SeFdhd]),
         // Macintosh Classic
         ("c1c47260bacac2473e21849925fbfdf48e5ab584aaef7c6d54569d0cb6b41cce", &[Self::Classic]),
+        // Macintosh Portable
+        ("3de29198fc61859ed6146dae0b84cec6c980045f4e3efd64a683aab4db8e04a4", &[Self::Portable]),
         // Macintosh II v1
         ("cc6d754cfa7841644971718ada1121bc5f94ff954918f502a75abb0e6fd90540", &[Self::MacII]),
         // Macintosh II v2
@@ -90,6 +95,7 @@ impl MacModel {
             Self::Early512K | Self::Early512Ke => 512 * 1024,
             Self::Plus | Self::SE | Self::SeFdhd | Self::Classic => 4096 * 1024,
             Self::MacII | Self::MacIIFDHD => 8 * 1024 * 1024,
+            Self::Portable => 9 * 1024 * 1024,
         }
     }
 
@@ -100,6 +106,7 @@ impl MacModel {
             Self::SeFdhd | Self::Classic => true,
             Self::MacII => false,
             Self::MacIIFDHD => true,
+            Self::Portable => true,
         }
     }
 
@@ -110,6 +117,11 @@ impl MacModel {
             Self::Early512Ke | Self::Plus => &[DriveType::GCR800K, DriveType::GCR800K],
             Self::SE => &[DriveType::GCR800K, DriveType::GCR800K, DriveType::GCR800K],
             Self::SeFdhd => &[
+                DriveType::SuperDrive,
+                DriveType::SuperDrive,
+                DriveType::SuperDrive,
+            ],
+            Self::Portable => &[
                 DriveType::SuperDrive,
                 DriveType::SuperDrive,
                 DriveType::SuperDrive,
@@ -144,6 +156,7 @@ impl MacModel {
             Self::SE | Self::SeFdhd | Self::Classic => cycles % 16 >= 4,
             // No interleave for MacII
             Self::MacII | Self::MacIIFDHD => true,
+            Self::Portable => true,
         }
     }
 
@@ -151,7 +164,7 @@ impl MacModel {
         match self {
             Self::Early128K | Self::Early512K => None,
             Self::Early512Ke | Self::Plus => Some((0x0002AE, 0x0040_0000)),
-            Self::SE | Self::SeFdhd | Self::Classic | Self::MacII | Self::MacIIFDHD => {
+            Self::SE | Self::SeFdhd | Self::Classic | Self::MacII | Self::MacIIFDHD | Self::Portable => {
                 Some((0x000CFC, 0x574C5343))
             }
         }
@@ -165,7 +178,8 @@ impl MacModel {
             | Self::Plus
             | Self::SE
             | Self::SeFdhd
-            | Self::Classic => M68000,
+            | Self::Classic 
+            | Self::Portable => M68000,
             Self::MacII | Self::MacIIFDHD => M68020,
         }
     }
@@ -214,6 +228,7 @@ impl Display for MacModel {
                 Self::SE => "Macintosh SE",
                 Self::SeFdhd => "Macintosh SE (FDHD)",
                 Self::Classic => "Macintosh Classic",
+                Self::Portable => "Macintosh Portable",
                 Self::MacII => "Macintosh II",
                 Self::MacIIFDHD => "Macintosh II (FDHD)",
             }
