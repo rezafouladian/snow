@@ -194,11 +194,11 @@ where
             // Sound
             0x00FB_0000..=0x00FB_FFFF => self.asc.write(addr & 0xFFF, val),
             // Normandy registers
-            // TODO
+            0x00FC_0000..=0x00FC_FFFF => self.normandy.write(addr, val),
             // SCC
             0x00FD_0000..=0x00FD_FFFF => self.scc.write(addr >> 1, val),
             // Normandy registers
-            // TODO
+            0x00FE_0000..=0x00FE_FFFF => self.normandy.write(addr, val),
             _ => None,
         }
     }
@@ -247,12 +247,11 @@ where
             // Sound
             0x00FB_0000..=0x00FB_FFFF => self.asc.read(addr & 0xFFF),
             // Normandy registers
-            // TODO
+            0x00FC_0000..=0x00FC_FFFF => self.normandy.read(addr),
             // SCC
             0x00FD_0000..=0x00FD_FFFF => self.scc.read(addr >> 1),
             // Normandy registers
-            0x00FE_0000..=0x00FE_0001 => Some(0xFF),
-            0x00FE_0002..=0x00FE_0003 => Some(0xFF),
+            0x00FE_0000..=0x00FE_FFFF => self.normandy.read(addr),
             _ => None,
         };
         result
