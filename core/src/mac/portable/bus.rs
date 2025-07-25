@@ -178,6 +178,8 @@ where
             }
             // ROM
             0x0090_0000..=0x009F_FFFF => Some(()),
+            // SLIM TODO
+            0x00F0_0000..=0x00F0_FFFF => Some(()),
             // SWIM
             0x00F6_0000..=0x00F6_FFFF => self.swim.write(addr, val),
             // VIA
@@ -222,6 +224,8 @@ where
             0x0090_0000..=0x009F_FFFF => {
                 Some(*self.rom.get(addr as usize & self.rom_mask).unwrap_or(&0xFF))
             }
+            // SLIM TODO
+            0x00F0_0000..=0x00F0_FFFF => Some(0xFF),
             // SWIM
             0x00F6_0000..=0x00F6_FFFF => self.swim.read(addr),
             // VIA
@@ -393,6 +397,8 @@ where
             }
         }
 
+        self.pmgr.reset();
+
         // Take the ADB transceiver out because that contains crossbeam channels..
         //let oldadb = std::mem::replace(&mut self.via, Via::new(self.model)).adb;
         //let _ = std::mem::replace(&mut self.via.adb, oldadb);
@@ -451,12 +457,13 @@ where
 
         self.swim.intdrive = self.via.b_out.drivesel();
         self.swim.tick(1)?;
-        
-        self.pmgr.pmreq = self.via.b_out.pmreq();
 
+        self.pmgr.a_out = self.via.a_out.0;
+        self.pmgr.a_in = self.via.a_in.0;
+        self.pmgr.pmreq = self.via.b_out.pmreq();
         self.pmgr.tick(1)?;
-        
         self.via.b_in.set_pmack(self.pmgr.pmack);
+        self.via.a_in.0 = self.pmgr.a_in;
 
         
 
