@@ -131,7 +131,7 @@ impl Pmgr {
             0x50 => todo!(),
             // Read modem TODO
             0x58 => (Ok(()), Some(vec![0x00])),
-            // Battery now
+            // Battery now (unused)
             0x60..=0x67 | 0x6A..=0x6F => todo!(),
             // Read battery
             0x68 => self.battery_read(),
@@ -230,6 +230,7 @@ impl Pmgr {
 
     // Read XPRAM
     fn xpram_read(&mut self, loc: Byte, len: Byte) -> (Result<()>, Option<Vec<Byte>>) {
+        self.length = len;
         match loc + len -1 {
             0x00..=0x7F => {
                 self.length = len;
@@ -267,7 +268,7 @@ impl Pmgr {
         self.length = 0x03;
         (
             Ok(()),
-            Some(vec![0xFF, 0xD0, 0xA0]),
+            Some(vec![0x01, 0xD0, 0xA0]),
         )
     }
 
@@ -340,6 +341,7 @@ impl Tickable for Pmgr {
                     self.data_pointer += 1;
                     if self.data_pointer >= self.length as usize {
                         self.wait_count = 10;
+                        self.data_pointer = 0;
                         self.state = State::WaitCommand;
                     } else {
                         self.state = State::WaitData;
@@ -408,16 +410,16 @@ impl Tickable for Pmgr {
             State::ReturnData => {
                 if self.pmreq & self.pmack {
                     self.pmack = false;
-                    self.a_in = self.data[self.length as usize - 1];
+                    self.a_in = self.data[self.data_pointer];
                 }
                 if !self.pmreq {
                     self.pmack = true;
-                    self.length -= 1;
-                    if !self.length == 0 {
+                    self.data_pointer += 1;
+                    if self.data_pointer >= self.length as usize {
+                        self.state = State::Cleanup;
+                    } else {
                         self.wait_count = 100;
                         self.state = State::ReturnDataWait;
-                    } else {
-                        self.state = State::Cleanup;
                     }
                 }
             }
