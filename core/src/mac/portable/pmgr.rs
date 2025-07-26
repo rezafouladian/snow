@@ -4,7 +4,7 @@ use crate::tickable::{Tickable, Ticks};
 use crate::types::Byte;
 use anyhow::{anyhow, Result};
 use proc_bitfield::bitfield;
-use crate::mac::adb::{AdbDevice, AdbDeviceInstance};
+use crate::mac::adb::{AdbDevice, AdbDeviceInstance, AdbDeviceResponse};
 
 const DEFAULT_LOW_LEVEL: u16 = 590 - 512;
 const DEFAULT_CUTOFF_LEVEL: u16 = 574 - 512;
@@ -60,6 +60,7 @@ bitfield! {
 bitfield! {
     pub struct ADBStatus(u8): {
         pub init: bool @ 0,
+        pub srq: bool @ 3,
     }
 }
 
@@ -107,8 +108,10 @@ pub struct Pmgr {
 
     last_adb: Byte,
     adb_ready: bool,
-    
+
     adb_devices: Vec<AdbDeviceInstance>,
+    adb_response: AdbDeviceResponse,
+    adb_srq: bool,
 
     battery_level: u8,
 
@@ -167,8 +170,10 @@ impl Pmgr {
 
             last_adb: 0x00,
             adb_ready: false,
-            
+            adb_srq: false,
+
             adb_devices: vec![],
+            adb_response: AdbDeviceResponse::new(),
 
             battery_level: (720 - 512) as u8,
 
@@ -286,16 +291,33 @@ impl Pmgr {
     }
 
     fn adb(&mut self, cmd: Byte, flags: Byte, len: Byte, data: Vec<Byte>) -> (Result<()>, Option<Vec<Byte>>) {
+        self.adb_response.clear();
         self.interrupt_flags.set_adbint(false);
         self.last_adb = cmd;
         if flags == 1 {
             self.adb_ready = true;
             self.interrupt_flags.set_adbint(true);
         }
-        println!(
-            "ADB command: {:X}, flags: {:X}, len: {:X}, data: {:?}",
-            cmd, flags, len, data
-        );
+        let Some(device) = self.adb_devices.iter_mut().find(|d| d.get_address() == (cmd >> 4)) else {
+            return (Ok(()), None);
+        };
+        match cmd & 0x0D {
+            0x00 => {
+                for dev in &mut self.adb_devices {
+                    dev.reset();
+                }
+            }
+            0x01 => {
+                device.flush();
+            }
+            0x08 => {
+                device.listen(cmd & 3, &data[1..]);
+            }
+            0x0C => {
+                self.adb_response = device.talk(cmd & 3);
+            }
+            _ => {}
+        }
         (Ok(()), None)
     }
 
@@ -306,12 +328,20 @@ impl Pmgr {
 
     fn adb_status(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
         // TEMP
-        let length = 0;
 
-        self.length = 0x01;
+        // Find device with srq
+        if self.adb_status.srq() {
+            let Some(device) = self.adb_devices.iter_mut().find(|d| d.get_srq()) else {
+                return (Ok(()), None);
+            };
+            self.adb_response = device.talk(0);
+        }
+        let response = self.adb_response.pop_at(0).unwrap_or(0);
+        let length = 1;
+
         self.interrupt_flags.set_adbint(false);
         self.length = 3 + length;
-        (Ok(()), Some(vec![self.last_adb, self.adb_status.0, length]))
+        (Ok(()), Some(vec![self.last_adb, self.adb_status.0, length, response]))
     }
 
     fn pram_write(&mut self, data: Vec<Byte>) -> (Result<()>, Option<Vec<Byte>>) {
@@ -423,10 +453,10 @@ impl Pmgr {
         }
         (Ok(()), Some(vec![0x00]))
     }
-    
+
     pub(crate) fn adb_add_device<T>(&mut self, device: T)
     where
-        T: AdbDevice + Send + 'static, 
+        T: AdbDevice + Send + 'static,
     {
         self.adb_devices.push(Box::new(device));
     }
@@ -438,6 +468,9 @@ impl Pmgr {
         self.length = 0x00;
         self.pmack = true;
         self.pmreq = true;
+        self.adb_ready = false;
+        self.adb_status.set_srq(false);
+        self.interrupt_flags.set_adbint(false);
     }
 }
 
@@ -457,6 +490,11 @@ impl Tickable for Pmgr {
             self.interrupt = true;
         } else {
             self.interrupt = false;
+        }
+
+        if self.adb_devices.iter().any(|d| d.get_srq()) & !self.interrupt_flags.adbint() {
+            self.interrupt_flags.set_adbint(true);
+            self.adb_status.set_srq(true);
         }
 
         match self.state {
@@ -688,7 +726,8 @@ impl Debuggable for Pmgr {
                     })
                     .collect()
             ),
-
+            dbgprop_bool!("Power Manager Interrupt", self.interrupt),
+            dbgprop_bool!("ADB SRQ", self.adb_devices.iter().any(|d| d.get_srq())),
         ]
     }
 }
