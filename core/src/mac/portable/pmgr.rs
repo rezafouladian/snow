@@ -1,12 +1,45 @@
+use crate::debuggable::Debuggable;
 use crate::tickable::{Tickable, Ticks};
 use crate::types::Byte;
 use anyhow::{anyhow, Result};
-use crate::debuggable::Debuggable;
+use proc_bitfield::bitfield;
 
 const DEFAULT_LOW_LEVEL: u16 = 590 - 512;
 const DEFAULT_CUTOFF_LEVEL: u16 = 574 - 512;
 const DEFAULT_HICHG_LEVEL: u16 = 712 - 512;
 
+bitfield! {
+    pub struct UnknownFlags(u8): {
+        pub unk1: bool @ 1,
+        pub unk2: bool @ 2,
+        pub unk4: bool @ 4,
+        pub unk5: bool @ 5,
+        pub unk6: bool @ 6,
+        pub unk7: bool @ 7,
+    }
+}
+
+bitfield! {
+    pub struct InterruptFlags(u8): {
+        // ADB data waiting
+        pub adbint: bool @ 0,
+        // Low battery
+        pub batint: bool @ 1,
+        pub unimplemented: bool @ 2,
+        pub resetint: bool @ 3,
+    }
+}
+
+bitfield! {
+    pub struct PowerFlags(u8): {
+        pub charger_connected: bool @ 0,
+        pub hichg: bool @ 1,
+        pub hichg_overflow: bool @ 2,
+        pub battery_dead: bool @ 3,
+        pub battery_low: bool @ 4,
+        pub charger_changed: bool @ 5,
+    }
+}
 #[derive(Debug)]
 enum State {
     Idle,
@@ -42,10 +75,17 @@ pub struct Pmgr {
 
     // Power plane
     power_plane: u8,
-    
+
     adb_status: u8,
+    unknown_flags: UnknownFlags,
+    interrupt_flags: InterruptFlags,
+    power_flags: PowerFlags,
+
+    battery_level: u8,
 
     state: State,
+
+    timer1: usize,
 
     // Whether the command is a read or write
     read: bool,
@@ -75,10 +115,17 @@ impl Pmgr {
             pram: [0x00; 128],
 
             power_plane: 0x9F,
-            
+
             adb_status: 0x00,
+            unknown_flags: UnknownFlags(0),
+            interrupt_flags: InterruptFlags(0),
+            power_flags: PowerFlags(0b1),
+
+            battery_level: (720 - 512) as u8,
 
             state: State::Idle,
+
+            timer1: 0,
 
             read: false,
             cmd: 0x00,
@@ -131,7 +178,7 @@ impl Pmgr {
             0x50 => todo!(),
             // Read modem TODO
             0x58 => (Ok(()), Some(vec![0x00])),
-            // Battery now (unused)
+            // Read battery with update (unused but valid command)
             0x60..=0x67 | 0x6A..=0x6F => todo!(),
             // Read battery
             0x68 => self.battery_read(),
@@ -164,7 +211,7 @@ impl Pmgr {
             _ => {
                 println!("Unknown command: {:X}", cmd);
                 (Ok(()), None)
-            },
+            }
         }
     }
 
@@ -190,11 +237,21 @@ impl Pmgr {
     }
 
     fn adb(&mut self, cmd: Byte, flags: Byte, len: Byte, data: Vec<Byte>) -> Result<()> {
-        println!("ADB command: {:X}, flags: {:X}, len: {:X}, data: {:?}", cmd, flags, len, data);
+        self.interrupt_flags.set_adbint(false);
+        println!(
+            "ADB command: {:X}, flags: {:X}, len: {:X}, data: {:?}",
+            cmd, flags, len, data
+        );
         Ok(())
     }
 
+    fn adb_off(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        self.interrupt_flags.set_adbint(false);
+        (Ok(()), None)
+    }
+
     fn adb_status(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        self.interrupt_flags.set_adbint(false);
         (Ok(()), Some(vec![self.adb_status]))
     }
 
@@ -205,8 +262,13 @@ impl Pmgr {
         (Ok(()), None)
     }
 
-    fn xpram_write(&mut self, loc: Byte, len: Byte, data: Vec<Byte>) -> (Result<()>, Option<Vec<Byte>>){
-        match loc + len -1 {
+    fn xpram_write(
+        &mut self,
+        loc: Byte,
+        len: Byte,
+        data: Vec<Byte>,
+    ) -> (Result<()>, Option<Vec<Byte>>) {
+        match loc + len - 1 {
             0x00..=0x7F => {
                 for i in 0..len as usize {
                     self.pram[loc as usize + i] = data[i];
@@ -216,34 +278,31 @@ impl Pmgr {
             _ => {
                 println!("Invalid XPRAM location: {:X}", loc);
                 (Err(anyhow!("Invalid XPRAM location")), None)
-            },
+            }
         }
     }
 
     // Read the first 20 bytes of PRAM
     fn pram_read(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
         self.length = 20;
-        (
-            Ok(()),
-            Some(self.pram[0..20].to_owned()),
-        )
+        (Ok(()), Some(self.pram[0..20].to_owned()))
     }
 
     // Read XPRAM
     fn xpram_read(&mut self, loc: Byte, len: Byte) -> (Result<()>, Option<Vec<Byte>>) {
         self.length = len;
-        match loc + len -1 {
+        match loc + len - 1 {
             0x00..=0x7F => {
                 self.length = len;
                 (
                     Ok(()),
                     Some(self.pram[loc as usize..(loc + len) as usize].to_owned()),
                 )
-            },
+            }
             _ => {
                 println!("Invalid XPRAM location: {:X}", loc);
                 (Err(anyhow!("Invalid XPRAM location")), None)
-            },
+            }
         }
     }
 
@@ -266,11 +325,24 @@ impl Pmgr {
 
     fn battery_read(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
         // TODO
+
+        if self.unknown_flags.unk1() {
+            self.interrupt_flags.set_unimplemented(false);
+            self.interrupt_flags.set_batint(false);
+            self.power_flags.set_charger_changed(false);
+        }
         self.length = 0x03;
         (
             Ok(()),
-            Some(vec![0x01, 0xD0, 0xA0]),
+            Some(vec![self.power_flags.0, self.battery_level, 0xA0]),
         )
+    }
+
+    fn read_interrupts(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        self.interrupt_flags.set_resetint(false);
+        self.unknown_flags.set_unk1(false);
+        self.length = 0x01;
+        (Ok(()), Some(vec![self.interrupt_flags.0]))
     }
 
     pub(crate) fn reset(&mut self) {
@@ -285,6 +357,16 @@ impl Pmgr {
 
 impl Tickable for Pmgr {
     fn tick(&mut self, ticks: Ticks) -> Result<Ticks> {
+        match self.timer1 {
+            1 => {
+                self.timer1 -= 1;
+            }
+            0 => {}
+            _ => {
+                self.timer1 -= 1;
+            }
+        }
+
         match self.state {
             State::Idle => {
                 if !self.pmreq {
@@ -453,12 +535,26 @@ impl Tickable for Pmgr {
 impl Debuggable for Pmgr {
     fn get_debug_properties(&self) -> crate::debuggable::DebuggableProperties {
         use crate::debuggable::*;
-        use crate::{dbgprop_string, dbgprop_bool, dbgprop_group};
+        use crate::{dbgprop_bool, dbgprop_group, dbgprop_string};
 
         vec![
             dbgprop_string!("State", format!("{:?}", self.state)),
-            dbgprop_string!("PMREQ*", if self.pmreq { "deasserted".to_string() } else { "asserted".to_string() }),
-            dbgprop_string!("PMACK*", if self.pmack { "deasserted".to_string() } else { "asserted".to_string() }),
+            dbgprop_string!(
+                "PMREQ*",
+                if self.pmreq {
+                    "deasserted".to_string()
+                } else {
+                    "asserted".to_string()
+                }
+            ),
+            dbgprop_string!(
+                "PMACK*",
+                if self.pmack {
+                    "deasserted".to_string()
+                } else {
+                    "asserted".to_string()
+                }
+            ),
             dbgprop_bool!("SWIM Power", self.power_plane & 0x01 != 0),
             dbgprop_bool!("SCC Power", self.power_plane & 0x02 != 0),
             dbgprop_bool!("HD Power", self.power_plane & 0x04 != 0),
@@ -468,16 +564,18 @@ impl Debuggable for Pmgr {
             dbgprop_bool!("-5V Power", self.power_plane & 0x40 != 0),
             dbgprop_group!(
                 "PRAM Contents",
-                (0..8).map(|row| {
-                    dbgprop_string!(
-                        format!("{:02X}", row * 16),
-                        (0..16)
-                            .map(|col| format!("{:02X}", self.pram[row * 16 + col]))
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    )
-                }).collect()
-            )
+                (0..8)
+                    .map(|row| {
+                        dbgprop_string!(
+                            format!("{:02X}", row * 16),
+                            (0..16)
+                                .map(|col| format!("{:02X}", self.pram[row * 16 + col]))
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        )
+                    })
+                    .collect()
+            ),
         ]
     }
 }
