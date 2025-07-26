@@ -288,11 +288,22 @@ impl Emulator {
                 let mut cpu = Box::new(CpuM68000::new(bus));
                 assert_eq!(cpu.get_type(), model.cpu_type());
 
+                let adbmouse_sender =  {
+                    let (mouse, mouse_sender) = AdbMouse::new();
+                    cpu.bus.pmgr.adb_add_device(mouse);
+                    Some(mouse_sender)
+                };
+                let adbkeyboard_sender = {
+                    let (keyboard, sender) = AdbKeyboard::new();
+                    cpu.bus.pmgr.adb_add_device(keyboard);
+                    Some(sender)
+                };
+
                 cpu.reset()?;
                 (
                     EmulatorConfig::Portable(cpu),
-                    None,
-                    None,
+                    adbkeyboard_sender,
+                    adbmouse_sender,
                 )
             }
             MacModel::MacII | MacModel::MacIIFDHD => {

@@ -3,7 +3,8 @@
 
 use proc_bitfield::bitfield;
 use crate::bus::{Address, BusMember};
-
+use crate::dbgprop_bool;
+use crate::debuggable::{Debuggable, DebuggableProperties};
 
 bitfield! {
     #[derive(Clone)]
@@ -15,9 +16,11 @@ bitfield! {
 }
 
 pub struct Normandy {
-    idle_speed: bool,
-    slim_dtack: bool,
-    slim_mapper: Vec<SlimMapper>
+    pub idle_speed: bool,
+    pub slim_dtack: bool,
+    slim_mapper: Vec<SlimMapper>,
+
+    pub dtack_counter: u8,
 }
 
 impl Normandy {
@@ -25,7 +28,9 @@ impl Normandy {
         Self {
             idle_speed: false,
             slim_dtack: false,
-            slim_mapper: vec![SlimMapper(0); 16]
+            slim_mapper: vec![SlimMapper(0); 16],
+
+            dtack_counter: 0,
         }
     }
 }
@@ -113,5 +118,17 @@ impl BusMember<Address> for Normandy {
             }
             _ => { None }
         }
+    }
+}
+
+impl Debuggable for Normandy {
+    fn get_debug_properties(&self) -> DebuggableProperties {
+        use crate::debuggable::*;
+        use crate::{dbgprop_bool};
+        
+        vec![
+            dbgprop_bool!("Idle", self.idle_speed),
+            dbgprop_bool!("Slim DTACK", self.slim_dtack),
+        ]
     }
 }

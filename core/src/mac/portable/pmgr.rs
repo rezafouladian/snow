@@ -1,8 +1,10 @@
+use std::ops::{BitOrAssign, BitXorAssign};
 use crate::debuggable::Debuggable;
 use crate::tickable::{Tickable, Ticks};
 use crate::types::Byte;
 use anyhow::{anyhow, Result};
 use proc_bitfield::bitfield;
+use crate::mac::adb::{AdbDevice, AdbDeviceInstance};
 
 const DEFAULT_LOW_LEVEL: u16 = 590 - 512;
 const DEFAULT_CUTOFF_LEVEL: u16 = 574 - 512;
@@ -12,10 +14,10 @@ bitfield! {
     pub struct UnknownFlags(u8): {
         pub unk1: bool @ 1,
         pub unk2: bool @ 2,
-        pub unk4: bool @ 4,
+        pub wake_time_on: bool @ 4,
         pub unk5: bool @ 5,
         pub unk6: bool @ 6,
-        pub unk7: bool @ 7,
+        pub ring_wake_on: bool @ 7,
     }
 }
 
@@ -38,8 +40,29 @@ bitfield! {
         pub battery_dead: bool @ 3,
         pub battery_low: bool @ 4,
         pub charger_changed: bool @ 5,
+        pub unk6: bool @ 6,
     }
 }
+
+bitfield! {
+    pub struct PowerPlane(u8): {
+        pub swim_power: bool @ 0,
+        pub scc_power: bool @ 1,
+        pub hd_power: bool @ 2,
+        pub modem_power: bool @ 3,
+        pub serial_power: bool @ 4,
+        pub sound_power: bool @ 5,
+        pub negative_power: bool @ 6,
+        pub sys_power: bool @ 7,
+    }
+}
+
+bitfield! {
+    pub struct ADBStatus(u8): {
+        pub init: bool @ 0,
+    }
+}
+
 #[derive(Debug)]
 enum State {
     Idle,
@@ -71,15 +94,21 @@ pub struct Pmgr {
     contrast: u8,
 
     // PRAM storage
-    pram: [Byte; 128],
+    pram: [Byte; 20],
+    xpram: [Byte; 128],
 
     // Power plane
-    power_plane: u8,
+    power_plane: PowerPlane,
 
-    adb_status: u8,
+    adb_status: ADBStatus,
     unknown_flags: UnknownFlags,
     interrupt_flags: InterruptFlags,
     power_flags: PowerFlags,
+
+    last_adb: Byte,
+    adb_ready: bool,
+    
+    adb_devices: Vec<AdbDeviceInstance>,
 
     battery_level: u8,
 
@@ -99,8 +128,21 @@ pub struct Pmgr {
     pub(crate) pmack: bool,
     pub(crate) a_in: Byte,
     pub(crate) a_out: Byte,
+    pub(crate) interrupt: bool,
 
     debug_flag: bool,
+}
+
+impl BitOrAssign<u8> for PowerPlane {
+    fn bitor_assign(&mut self, rhs: u8) {
+        *self = PowerPlane(self.0 | rhs);
+    }
+}
+
+impl BitXorAssign<u8> for PowerPlane {
+    fn bitxor_assign(&mut self, rhs: u8) {
+        *self = PowerPlane(self.0 ^ rhs);
+    }
 }
 
 impl Pmgr {
@@ -112,14 +154,21 @@ impl Pmgr {
 
             contrast: 0x0F,
 
-            pram: [0x00; 128],
+            pram: [0x00; 20],
+            xpram: [0x00; 128],
 
-            power_plane: 0x9F,
 
-            adb_status: 0x00,
+            power_plane: PowerPlane(0x9F),
+
+            adb_status: ADBStatus(0),
             unknown_flags: UnknownFlags(0),
             interrupt_flags: InterruptFlags(0),
             power_flags: PowerFlags(0b1),
+
+            last_adb: 0x00,
+            adb_ready: false,
+            
+            adb_devices: vec![],
 
             battery_level: (720 - 512) as u8,
 
@@ -140,22 +189,22 @@ impl Pmgr {
             a_out: 0x00,
 
             debug_flag: false,
+
+            interrupt: false,
         }
+
     }
 
     fn cmd(&mut self, cmd: Byte, len: Byte, data: Vec<Byte>) -> (Result<()>, Option<Vec<Byte>>) {
         match cmd {
             // Power control
-            0x10 => (self.power_control_set(data[0]), None),
+            0x10 => self.power_control_set(data[0]),
             // Power status
             0x18 => (Ok(()), Some(vec![self.power_control_get().unwrap()])),
             // ADB command
-            0x20 => (
-                self.adb(data[0], data[1], data[2], data[3..].to_owned()),
-                None,
-            ),
+            0x20 => self.adb(data[0], data[1], data[2], data[3..].to_owned()),
             // ADB off TODO
-            0x21 => (Ok(()), None),
+            0x21 => self.adb_off(),
             // ADB status
             0x28 => self.adb_status(),
             // Clock set TODO
@@ -187,7 +236,7 @@ impl Pmgr {
             // Sleep request
             0x70 => todo!(),
             // Read interrupts TODO
-            0x78 => (Ok(()), Some(vec![0x00])),
+            0x78 => self.read_interrupts(),
             // Set wake up time
             0x80 => todo!(),
             // Clear wake up time
@@ -215,17 +264,17 @@ impl Pmgr {
         }
     }
 
-    fn power_control_set(&mut self, val: Byte) -> Result<()> {
+    fn power_control_set(&mut self, val: Byte) -> (Result<()>, Option<Vec<Byte>>) {
         match val & 0x80 {
             // Turn devices on
             0x00 => {
                 self.power_plane |= val & 0x7F;
-                Ok(())
+                (Ok(()), None)
             }
             // Turn devices off
             0x80 => {
                 self.power_plane ^= val & 0x7F;
-                Ok(())
+                (Ok(()), None)
             }
             _ => unreachable!(),
         }
@@ -233,16 +282,21 @@ impl Pmgr {
 
     fn power_control_get(&mut self) -> Result<Byte> {
         self.length = 0x01;
-        Ok(self.power_plane & 0x7F)
+        Ok(self.power_plane.0 & 0x7F)
     }
 
-    fn adb(&mut self, cmd: Byte, flags: Byte, len: Byte, data: Vec<Byte>) -> Result<()> {
+    fn adb(&mut self, cmd: Byte, flags: Byte, len: Byte, data: Vec<Byte>) -> (Result<()>, Option<Vec<Byte>>) {
         self.interrupt_flags.set_adbint(false);
+        self.last_adb = cmd;
+        if flags == 1 {
+            self.adb_ready = true;
+            self.interrupt_flags.set_adbint(true);
+        }
         println!(
             "ADB command: {:X}, flags: {:X}, len: {:X}, data: {:?}",
             cmd, flags, len, data
         );
-        Ok(())
+        (Ok(()), None)
     }
 
     fn adb_off(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
@@ -251,8 +305,13 @@ impl Pmgr {
     }
 
     fn adb_status(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        // TEMP
+        let length = 0;
+
+        self.length = 0x01;
         self.interrupt_flags.set_adbint(false);
-        (Ok(()), Some(vec![self.adb_status]))
+        self.length = 3 + length;
+        (Ok(()), Some(vec![self.last_adb, self.adb_status.0, length]))
     }
 
     fn pram_write(&mut self, data: Vec<Byte>) -> (Result<()>, Option<Vec<Byte>>) {
@@ -271,7 +330,7 @@ impl Pmgr {
         match loc + len - 1 {
             0x00..=0x7F => {
                 for i in 0..len as usize {
-                    self.pram[loc as usize + i] = data[i];
+                    self.xpram[loc as usize + i] = data[i];
                 }
                 (Ok(()), None)
             }
@@ -296,7 +355,7 @@ impl Pmgr {
                 self.length = len;
                 (
                     Ok(()),
-                    Some(self.pram[loc as usize..(loc + len) as usize].to_owned()),
+                    Some(self.xpram[loc as usize..(loc + len) as usize].to_owned()),
                 )
             }
             _ => {
@@ -325,7 +384,7 @@ impl Pmgr {
 
     fn battery_read(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
         // TODO
-
+        let power_flags = self.power_flags.0;
         if self.unknown_flags.unk1() {
             self.interrupt_flags.set_unimplemented(false);
             self.interrupt_flags.set_batint(false);
@@ -334,15 +393,42 @@ impl Pmgr {
         self.length = 0x03;
         (
             Ok(()),
-            Some(vec![self.power_flags.0, self.battery_level, 0xA0]),
+            Some(vec![power_flags, self.battery_level, 0xA0]),
         )
     }
 
     fn read_interrupts(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        let interrupt_flags = self.interrupt_flags.0;
         self.interrupt_flags.set_resetint(false);
         self.unknown_flags.set_unk1(false);
         self.length = 0x01;
-        (Ok(()), Some(vec![self.interrupt_flags.0]))
+        (Ok(()), Some(vec![interrupt_flags]))
+    }
+
+    fn wake_set(&mut self, time: Byte) -> (Result<()>, Option<Vec<Byte>>) {
+        // TODO
+        self.unknown_flags.set_wake_time_on(true);
+        (Ok(()), None)
+    }
+
+    fn wake_clear(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        self.unknown_flags.set_wake_time_on(false);
+        (Ok(()), None)
+    }
+
+    fn wake_read(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        // TODO
+        if !self.unknown_flags.wake_time_on() {
+
+        }
+        (Ok(()), Some(vec![0x00]))
+    }
+    
+    pub(crate) fn adb_add_device<T>(&mut self, device: T)
+    where
+        T: AdbDevice + Send + 'static, 
+    {
+        self.adb_devices.push(Box::new(device));
     }
 
     pub(crate) fn reset(&mut self) {
@@ -365,6 +451,12 @@ impl Tickable for Pmgr {
             _ => {
                 self.timer1 -= 1;
             }
+        }
+
+        if self.interrupt_flags.0 != 0 {
+            self.interrupt = true;
+        } else {
+            self.interrupt = false;
         }
 
         match self.state {
@@ -555,27 +647,48 @@ impl Debuggable for Pmgr {
                     "asserted".to_string()
                 }
             ),
-            dbgprop_bool!("SWIM Power", self.power_plane & 0x01 != 0),
-            dbgprop_bool!("SCC Power", self.power_plane & 0x02 != 0),
-            dbgprop_bool!("HD Power", self.power_plane & 0x04 != 0),
-            dbgprop_bool!("Modem Power", self.power_plane & 0x08 != 0),
-            dbgprop_bool!("Serial Power", self.power_plane & 0x10 != 0),
-            dbgprop_bool!("Sound Power", self.power_plane & 0x20 != 0),
-            dbgprop_bool!("-5V Power", self.power_plane & 0x40 != 0),
+            dbgprop_bool!("SWIM Power", !self.power_plane.swim_power()),
+            dbgprop_bool!("SCC Power", !self.power_plane.scc_power()),
+            dbgprop_bool!("HD Power", !self.power_plane.hd_power()),
+            dbgprop_bool!("Modem Power", !self.power_plane.modem_power()),
+            dbgprop_bool!("Serial Power", !self.power_plane.serial_power()),
+            dbgprop_bool!("Sound Latch", !self.power_plane.sound_power()),
+            dbgprop_bool!("-5V Power", !self.power_plane.negative_power()),
             dbgprop_group!(
                 "PRAM Contents",
-                (0..8)
+                (0..2)
                     .map(|row| {
                         dbgprop_string!(
                             format!("{:02X}", row * 16),
                             (0..16)
-                                .map(|col| format!("{:02X}", self.pram[row * 16 + col]))
+                                .map(|col| {
+                                    if row * 16 + col < 20 {
+                                        format!("{:02X}", self.pram[row * 16 + col])
+                                    } else {
+                                        "  ".to_string()
+                                    }
+                                })
                                 .collect::<Vec<_>>()
                                 .join(" ")
                         )
                     })
                     .collect()
             ),
+            dbgprop_group!(
+                "XPRAM Contents",
+                (0..8)
+                    .map(|row| {
+                        dbgprop_string!(
+                            format!("{:02X}", row * 16),
+                            (0..16)
+                                .map(|col| format!("{:02X}", self.xpram[row * 16 + col]))
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        )
+                    })
+                    .collect()
+            ),
+
         ]
     }
 }

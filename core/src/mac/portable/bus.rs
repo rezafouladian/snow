@@ -28,6 +28,9 @@ pub const RAM_DIRTY_PAGESIZE: usize = 256;
 
 pub const CLOCK_SPEED: Ticks = 16_000_000;
 
+const IDLE_DTACK_DELAY: u8 = 64;
+const SLIM_DTACK_DELAY: u8 = 16;
+
 pub struct MacPortableBus<TRenderer: Renderer> {
     cycles: Ticks,
 
@@ -61,7 +64,7 @@ pub struct MacPortableBus<TRenderer: Renderer> {
     progkey_pressed: LatchingEvent,
 
     mouse_enabled: bool,
-    pmgr: Pmgr,
+    pub pmgr: Pmgr,
     normandy: Normandy,
 }
 
@@ -321,9 +324,45 @@ where
     }
 
     /// Tests for wait states on bus access
-    fn in_waitstate(&self, _addr: Address) -> bool {
-        // TODO
-        false
+    fn in_waitstate(&mut self, addr: Address) -> bool {
+        match addr {
+            0x0000_0000..=0x008F_FFFF => {
+                if self.normandy.idle_speed {
+                    match self.normandy.dtack_counter {
+                        0 => {
+                            self.normandy.dtack_counter = IDLE_DTACK_DELAY;
+                            true
+                        }
+                        1 => {
+                            self.normandy.dtack_counter -= 1;
+                            false
+                        }
+                        _ => {
+                            self.normandy.dtack_counter -= 1;
+                            true
+                        },
+                    }
+                } else if !self.normandy.slim_dtack & (0x0050_0000..=0x008F_FFFF).contains(&addr) {
+                    match self.normandy.dtack_counter {
+                        0 => {
+                            self.normandy.dtack_counter = SLIM_DTACK_DELAY;
+                            true
+                        }
+                        1 => {
+                            self.normandy.dtack_counter -= 1;
+                            false
+                        }
+                        _ => {
+                            self.normandy.dtack_counter -= 1;
+                            true
+                        },
+                    }
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
     }
 
     /// Programmer's key pressed
@@ -461,8 +500,8 @@ where
         self.pmgr.tick(1)?;
         self.via.b_in.set_pmack(self.pmgr.pmack);
         self.via.a_in.0 = self.pmgr.a_in;
-
-        
+        self.via.ifr.set_pmgr(self.pmgr.interrupt);
+        self.via.ier.set_pmgr(self.pmgr.interrupt);
 
         Ok(1)
     }
@@ -529,6 +568,7 @@ where
             dbgprop_nest!("SWIM", self.swim),
             dbgprop_nest!("VIA (SY6522)", self.via),
             dbgprop_nest!("Power Manager", self.pmgr),
+            dbgprop_nest!("Normandy", self.normandy),
         ];
 
         result
