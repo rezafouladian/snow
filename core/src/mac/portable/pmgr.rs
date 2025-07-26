@@ -222,6 +222,7 @@ impl Pmgr {
 
     // Read the first 20 bytes of PRAM
     fn pram_read(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        self.length = 20;
         (
             Ok(()),
             Some(self.pram[0..20].to_owned()),
@@ -391,7 +392,7 @@ impl Tickable for Pmgr {
                 }
                 if !self.pmreq {
                     self.pmack = true;
-                    if self.length > 4 { self.length = 4; }
+                    // if self.length > 4 { self.length = 4; }
                     if self.length == 0 {
                         self.state = State::Cleanup;
                     } else {
