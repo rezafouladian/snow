@@ -1,7 +1,7 @@
-use crate::mac::portable::via::Via;
 use crate::tickable::{Tickable, Ticks};
 use crate::types::Byte;
 use anyhow::{anyhow, Result};
+use crate::debuggable::Debuggable;
 
 const DEFAULT_LOW_LEVEL: u16 = 590 - 512;
 const DEFAULT_CUTOFF_LEVEL: u16 = 574 - 512;
@@ -42,6 +42,8 @@ pub struct Pmgr {
 
     // Power plane
     power_plane: u8,
+    
+    adb_status: u8,
 
     state: State,
 
@@ -57,6 +59,8 @@ pub struct Pmgr {
     pub(crate) pmack: bool,
     pub(crate) a_in: Byte,
     pub(crate) a_out: Byte,
+
+    debug_flag: bool,
 }
 
 impl Pmgr {
@@ -68,9 +72,11 @@ impl Pmgr {
 
             contrast: 0x0F,
 
-            pram: [0; 128],
+            pram: [0x00; 128],
 
             power_plane: 0x9F,
+            
+            adb_status: 0x00,
 
             state: State::Idle,
 
@@ -78,13 +84,15 @@ impl Pmgr {
             cmd: 0x00,
             length: 0x00,
             data_pointer: 0x00,
-            data: vec![0; 128],
+            data: vec![0; 32],
             wait_count: 0,
 
             pmreq: true,
             pmack: true,
             a_in: 0x00,
             a_out: 0x00,
+
+            debug_flag: false,
         }
     }
 
@@ -99,18 +107,21 @@ impl Pmgr {
                 self.adb(data[0], data[1], data[2], data[3..].to_owned()),
                 None,
             ),
+            // ADB off TODO
+            0x21 => (Ok(()), None),
             // ADB status
-            0x28 => todo!(),
+            0x28 => self.adb_status(),
             // Clock set TODO
             0x30 => (Ok(()), None),
-            // Write PRAM TODO
-            0x31 => (Ok(()), None),
-            // TODO
-            0x32 => (Ok(()), None),
+            // Write PRAM
+            0x31 => self.pram_write(data[0..].to_owned()),
+            // Write XPRAM
+            0x32 => self.xpram_write(data[0], data[1], data[2..].to_owned()),
             // Clock read TODO
             0x38 => (Ok(()), Some(vec![0x00; 4])),
-            // Read PRAM TODO
-            0x39 => (Ok(()), Some(vec![0x00; 20])),
+            // Read PRAM
+            0x39 => self.pram_read(),
+            // Read XPRAM
             0x3A => self.xpram_read(data[0], data[1]),
             // Set contrast
             0x40 => (self.contrast_set(data[0]), None),
@@ -120,8 +131,12 @@ impl Pmgr {
             0x50 => todo!(),
             // Read modem TODO
             0x58 => (Ok(()), Some(vec![0x00])),
-            // Read battery TODO
-            0x68 => (Ok(()), Some(vec![0x00])),
+            // Battery now
+            0x60..=0x67 | 0x6A..=0x6F => todo!(),
+            // Read battery
+            0x68 => self.battery_read(),
+            // Read battery with update
+            0x69 => self.battery_read(),
             // Sleep request
             0x70 => todo!(),
             // Read interrupts TODO
@@ -146,7 +161,10 @@ impl Pmgr {
             0xEC => (Ok(()), Some(vec![0x00])),
             // Soft reset
             0xEF => todo!(),
-            _ => (Ok(()), None),
+            _ => {
+                println!("Unknown command: {:X}", cmd);
+                (Ok(()), None)
+            },
         }
     }
 
@@ -167,6 +185,7 @@ impl Pmgr {
     }
 
     fn power_control_get(&mut self) -> Result<Byte> {
+        self.length = 0x01;
         Ok(self.power_plane & 0x7F)
     }
 
@@ -175,13 +194,43 @@ impl Pmgr {
         Ok(())
     }
 
-    fn adb_status(&mut self) -> Result<()> {
-        Ok(())
+    fn adb_status(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        (Ok(()), Some(vec![self.adb_status]))
+    }
+
+    fn pram_write(&mut self, data: Vec<Byte>) -> (Result<()>, Option<Vec<Byte>>) {
+        for i in 0..20 {
+            self.pram[i] = data[i];
+        }
+        (Ok(()), None)
+    }
+
+    fn xpram_write(&mut self, loc: Byte, len: Byte, data: Vec<Byte>) -> (Result<()>, Option<Vec<Byte>>){
+        match loc + len -1 {
+            0x00..=0x7F => {
+                for i in 0..len as usize {
+                    self.pram[loc as usize + i] = data[i];
+                }
+                (Ok(()), None)
+            }
+            _ => {
+                println!("Invalid XPRAM location: {:X}", loc);
+                (Err(anyhow!("Invalid XPRAM location")), None)
+            },
+        }
+    }
+
+    // Read the first 20 bytes of PRAM
+    fn pram_read(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        (
+            Ok(()),
+            Some(self.pram[0..20].to_owned()),
+        )
     }
 
     // Read XPRAM
     fn xpram_read(&mut self, loc: Byte, len: Byte) -> (Result<()>, Option<Vec<Byte>>) {
-        match loc + len {
+        match loc + len -1 {
             0x00..=0x7F => {
                 self.length = len;
                 (
@@ -189,7 +238,10 @@ impl Pmgr {
                     Some(self.pram[loc as usize..(loc + len) as usize].to_owned()),
                 )
             },
-            _ => (Err(anyhow!("Invalid XPRAM location")), None),
+            _ => {
+                println!("Invalid XPRAM location: {:X}", loc);
+                (Err(anyhow!("Invalid XPRAM location")), None)
+            },
         }
     }
 
@@ -206,7 +258,17 @@ impl Pmgr {
 
     // Read contrast (not implemented)
     fn contrast_get(&mut self) -> Result<Byte> {
+        self.length = 0x01;
         Ok(self.contrast)
+    }
+
+    fn battery_read(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        // TODO
+        self.length = 0x03;
+        (
+            Ok(()),
+            Some(vec![0xFF, 0xD0, 0xA0]),
+        )
     }
 
     pub(crate) fn reset(&mut self) {
@@ -363,7 +425,7 @@ impl Tickable for Pmgr {
                 self.cmd = 0x00;
                 self.length = 0x00;
                 self.data_pointer = 0x00;
-                self.data = vec![0; 128];
+                self.data = vec![0; 32];
                 self.wait_count = 100;
                 self.state = State::CleanupWait;
             }
@@ -382,5 +444,37 @@ impl Tickable for Pmgr {
         }
 
         Ok(ticks)
+    }
+}
+
+impl Debuggable for Pmgr {
+    fn get_debug_properties(&self) -> crate::debuggable::DebuggableProperties {
+        use crate::debuggable::*;
+        use crate::{dbgprop_string, dbgprop_bool, dbgprop_group};
+
+        vec![
+            dbgprop_string!("State", format!("{:?}", self.state)),
+            dbgprop_string!("PMREQ*", if self.pmreq { "deasserted".to_string() } else { "asserted".to_string() }),
+            dbgprop_string!("PMACK*", if self.pmack { "deasserted".to_string() } else { "asserted".to_string() }),
+            dbgprop_bool!("SWIM Power", self.power_plane & 0x01 != 0),
+            dbgprop_bool!("SCC Power", self.power_plane & 0x02 != 0),
+            dbgprop_bool!("HD Power", self.power_plane & 0x04 != 0),
+            dbgprop_bool!("Modem Power", self.power_plane & 0x08 != 0),
+            dbgprop_bool!("Serial Power", self.power_plane & 0x10 != 0),
+            dbgprop_bool!("Sound Power", self.power_plane & 0x20 != 0),
+            dbgprop_bool!("-5V Power", self.power_plane & 0x40 != 0),
+            dbgprop_group!(
+                "PRAM Contents",
+                (0..8).map(|row| {
+                    dbgprop_string!(
+                        format!("{:02X}", row * 16),
+                        (0..16)
+                            .map(|col| format!("{:02X}", self.pram[row * 16 + col]))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
+                }).collect()
+            )
+        ]
     }
 }
