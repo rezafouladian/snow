@@ -33,6 +33,9 @@ impl Normandy {
 impl BusMember<Address> for Normandy {
     fn read(&mut self, addr: Address) -> Option<u8> {
         match addr {
+            0xF0_0000..=0xF0_FFFF => {
+                Some(0x00)
+            }
             0xFC_0000..=0xFC_FFFF => {
                 match addr & 0x21F {
                     0x000..=0x01F => {
@@ -42,11 +45,11 @@ impl BusMember<Address> for Normandy {
                             Some(0x00)
                         }
                     }
-                    0x200 => {
+                    0x200..=0x201 => {
                         self.slim_dtack = true;
                         Some(0x00)
                     }
-                    0x202 => {
+                    0x202..=0x203 => {
                         Some(0x00)
                     }
                     _ => { None }
@@ -54,11 +57,11 @@ impl BusMember<Address> for Normandy {
             }
             0xFE_0000..=0xFE_FFFF => {
                 match addr & 0x202 {
-                    0xFE_0000 => {
+                    0x000 => {
                         self.idle_speed = false;
                         Some(0xFF)
                     }
-                    0xFE_0002 => {
+                    0x002 => {
                         self.idle_speed = true;
                         Some(0xFF)
                     }
@@ -72,6 +75,9 @@ impl BusMember<Address> for Normandy {
 
     fn write(&mut self, addr: Address, val: u8) -> Option<()> {
         match addr {
+            0xF0_0000..=0xF0_FFFF => {
+                Some(())
+            }
             0xFC_0000..=0xFC_FFFF => {
                 match addr & 0x21F {
                     0x000..=0x01F => {
@@ -82,11 +88,11 @@ impl BusMember<Address> for Normandy {
                             Some(())
                         }
                     }
-                    0x200 => {
+                    0x200..=0x201 => {
                         self.slim_dtack = true;
                         Some(())
                     }
-                    0x202 => {
+                    0x202..=0x203 => {
                         Some(())
                     }
                     _ => { None }
@@ -94,11 +100,11 @@ impl BusMember<Address> for Normandy {
             }
             0xFE_0000..=0xFE_FFFF => {
                 match addr & 0x202 {
-                    0xFE_0000 => {
+                    0x000 => {
                         self.idle_speed = false;
                         Some(())
                     }
-                    0xFE_0002 => {
+                    0x002 => {
                         self.idle_speed = true;
                         Some(())
                     }

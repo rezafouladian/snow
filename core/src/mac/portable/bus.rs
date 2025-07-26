@@ -176,8 +176,8 @@ where
             }
             // ROM
             0x0090_0000..=0x009F_FFFF => Some(()),
-            // SLIM TODO
-            0x00F0_0000..=0x00F0_FFFF => Some(()),
+            // SLIM/Normandy
+            0x00F0_0000..=0x00F0_FFFF => self.normandy.write(addr, val),
             // SWIM
             0x00F6_0000..=0x00F6_FFFF => self.swim.write(addr, val),
             // VIA
@@ -222,8 +222,8 @@ where
             0x0090_0000..=0x009F_FFFF => {
                 Some(*self.rom.get(addr as usize & self.rom_mask).unwrap_or(&0xFF))
             }
-            // SLIM TODO
-            0x00F0_0000..=0x00F0_FFFF => Some(0xFF),
+            // SLIM/Normandy
+            0x00F0_0000..=0x00F0_FFFF => self.normandy.read(addr),
             // SWIM
             0x00F6_0000..=0x00F6_FFFF => self.swim.read(addr),
             // VIA
