@@ -50,7 +50,6 @@ pub struct MacPortableBus<TRenderer: Renderer> {
     pub(crate) swim: Swim,
     pub(crate) scsi: ScsiController,
 
-    ram_mask: usize,
     rom_mask: usize,
 
     overlay: bool,
@@ -112,7 +111,6 @@ where
             asc: Asc::default(),
             mouse_ready: false,
 
-            ram_mask: (ram_size - 1),
             rom_mask: rom.len() - 1,
 
             overlay: true,
@@ -172,7 +170,7 @@ where
         match addr {
             // RAM
             0x0000_0000..=0x008F_FFFF => {
-                let idx = addr as usize & self.ram_mask;
+                let idx = addr as usize;
                 self.ram_dirty.insert(idx / RAM_DIRTY_PAGESIZE);
                 Some(self.ram[idx] = val)
             }
@@ -219,7 +217,7 @@ where
 
     fn read_normal(&mut self, addr: Address) -> Option<Byte> {
         let result = match addr {
-            0x0000_0000..=0x008F_0000 => Some(self.ram[addr as usize & self.ram_mask]),
+            0x0000_0000..=0x008F_FFFF => Some(self.ram[addr as usize]),
             // ROM
             0x0090_0000..=0x009F_FFFF => {
                 Some(*self.rom.get(addr as usize & self.rom_mask).unwrap_or(&0xFF))
