@@ -8,10 +8,38 @@ use crate::debuggable::{Debuggable, DebuggableProperties};
 
 bitfield! {
     #[derive(Clone)]
-    pub struct SlimMapper(u8): {
-        pub bit0: bool @ 0,
-        pub bit1: bool @ 1,
-        pub bit2: bool @ 2,
+    struct SlimMapper(u8): {
+        bit0: bool @ 0,
+        bit1: bool @ 1,
+        bit2: bool @ 2,
+    }
+}
+
+bitfield! {
+    struct SlimAdapter(u8): {
+        /// SLIM card adapter installed
+        installed: bool @ 3,
+    }
+}
+
+bitfield! {
+    struct SlimStatus(u8): {
+        readonly: bool @ 2,
+        inserted: bool @ 3,
+    }
+}
+
+bitfield! {
+    struct SlimEject(u8): {
+        /// Low to eject
+        eject: bool @ 3,
+    }
+}
+
+bitfield! {
+    struct SlimProtect(u8): {
+        /// Write protected
+        protect: bool @ 3,
     }
 }
 
@@ -19,6 +47,16 @@ pub struct Normandy {
     pub idle_speed: bool,
     pub slim_dtack: bool,
     slim_mapper: Vec<SlimMapper>,
+
+    slim_adapter: SlimAdapter,
+    slim1_status: SlimStatus,
+    slim1_eject: SlimEject,
+    slim1_protect: SlimProtect,
+    slim2_status: SlimStatus,
+    slim2_eject: SlimEject,
+    slim2_protect: SlimProtect,
+
+    slim_rom: Vec<u8>,
 
     pub dtack_counter: u8,
 }
@@ -30,6 +68,18 @@ impl Normandy {
             slim_dtack: false,
             slim_mapper: vec![SlimMapper(0); 16],
 
+            slim_adapter: SlimAdapter(0),
+            slim1_status: SlimStatus(0),
+            slim1_eject: SlimEject(0x08),
+            slim1_protect: SlimProtect(0),
+            slim2_status: SlimStatus(0),
+            slim2_eject: SlimEject(0x08),
+            slim2_protect: SlimProtect(0),
+
+            slim_rom: vec![
+                0; 0x10000
+            ],
+
             dtack_counter: 0,
         }
     }
@@ -38,8 +88,28 @@ impl Normandy {
 impl BusMember<Address> for Normandy {
     fn read(&mut self, addr: Address) -> Option<u8> {
         match addr {
-            0xF0_0000..=0xF0_FFFF => {
+            // SLIM adapter ROM
+            0xE0_0000..=0xE0_FFFF => {
                 Some(0x00)
+            }
+            0xF0_0000..=0xF0_FFFF => {
+                if self.slim_adapter.installed() {
+                    match addr {
+                        0xF0_0000 => Some(0x00),
+                        0xF0_0001 => Some(self.slim1_status.0),
+                        0xF0_0011 => Some(self.slim1_eject.0),
+                        0xF0_0020 => Some(0x00),
+                        0xF0_0021 => Some(self.slim1_protect.0),
+                        0xF0_0030 => Some(0x00),
+                        0xF0_0031 => Some(self.slim2_status.0),
+                        0xF0_0041 => Some(self.slim2_eject.0),
+                        0xF0_0050 => Some(0x00),
+                        0xF0_0051 => Some(self.slim2_protect.0),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
             }
             0xFC_0000..=0xFC_FFFF => {
                 match addr & 0x21F {
@@ -52,7 +122,11 @@ impl BusMember<Address> for Normandy {
                     }
                     0x200..=0x201 => {
                         self.slim_dtack = true;
-                        Some(0x00)
+                        if self.slim_adapter.installed() {
+                            Some(0x08)
+                        } else {
+                            Some(0x00)
+                        }
                     }
                     0x202..=0x203 => {
                         Some(0x00)
