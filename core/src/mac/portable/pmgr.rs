@@ -46,21 +46,24 @@ bitfield! {
 
 bitfield! {
     pub struct PowerPlane(u8): {
-        pub swim_power: bool @ 0,
-        pub scc_power: bool @ 1,
-        pub hd_power: bool @ 2,
-        pub modem_power: bool @ 3,
-        pub serial_power: bool @ 4,
-        pub sound_power: bool @ 5,
-        pub negative_power: bool @ 6,
-        pub sys_power: bool @ 7,
+        swim_power: bool @ 0,
+        scc_power: bool @ 1,
+        hd_power: bool @ 2,
+        modem_power: bool @ 3,
+        serial_power: bool @ 4,
+        sound_power: bool @ 5,
+        negative_power: bool @ 6,
+        sys_power: bool @ 7,
     }
 }
 
 bitfield! {
-    pub struct ADBStatus(u8): {
-        pub init: bool @ 0,
-        pub srq: bool @ 3,
+    struct ADBStatus(u8): {
+        init: bool @ 0,
+        autopoll: bool @ 2,
+        srq: bool @ 3,
+        noreply: bool @ 4,
+        error: bool @ 7,
     }
 }
 
@@ -85,20 +88,20 @@ enum State {
 }
 
 pub struct Pmgr {
-    // Low battery level
+    /// Low battery level
     low_level: u8,
-    // Cutoff level
+    /// Cutoff level
     cutoff_level: u8,
-    // Hicharge level
+    /// Hicharge level
     hichg_level: u8,
-    // Contrast level
+    /// Contrast level
     contrast: u8,
 
-    // PRAM storage
+    /// PRAM storage
     pram: [Byte; 20],
     xpram: [Byte; 128],
 
-    // Power plane
+    /// Power plane
     power_plane: PowerPlane,
 
     adb_status: ADBStatus,
@@ -106,7 +109,9 @@ pub struct Pmgr {
     interrupt_flags: InterruptFlags,
     power_flags: PowerFlags,
 
+    /// The last ADB command
     last_adb: Byte,
+    /// If ADB is initialized
     adb_ready: bool,
 
     adb_devices: Vec<AdbDeviceInstance>,
@@ -119,13 +124,15 @@ pub struct Pmgr {
 
     timer1: usize,
 
-    // Whether the command is a read or write
+    /// Whether the command is a read or write
     read: bool,
     cmd: Byte,
     length: Byte,
     data_pointer: usize,
     data: Vec<Byte>,
     wait_count: usize,
+
+    current_adb_device: usize,
 
     pub(crate) pmreq: bool,
     pub(crate) pmack: bool,
@@ -134,6 +141,9 @@ pub struct Pmgr {
     pub(crate) interrupt: bool,
 
     debug_flag: bool,
+
+    auto_poll2: bool,
+    auto_poll3: bool,
 }
 
 impl BitOrAssign<u8> for PowerPlane {
@@ -196,6 +206,10 @@ impl Pmgr {
             debug_flag: false,
 
             interrupt: false,
+
+            current_adb_device: 0x00,
+            auto_poll2: false,
+            auto_poll3: false,
         }
 
     }
@@ -205,7 +219,8 @@ impl Pmgr {
             // Power control
             0x10 => self.power_control_set(data[0]),
             // Power status
-            0x18 => (Ok(()), Some(vec![self.power_control_get().unwrap()])),
+            0x18 => self.power_control_get(),
+            0x1B => self.power_control_get(),
             // ADB command
             0x20 => self.adb(data[0], data[1], data[2], data[3..].to_owned()),
             // ADB off TODO
@@ -213,13 +228,13 @@ impl Pmgr {
             // ADB status
             0x28 => self.adb_status(),
             // Clock set TODO
-            0x30 => (Ok(()), None),
+            0x30 => self.clock_set(data[0]),
             // Write PRAM
             0x31 => self.pram_write(data[0..].to_owned()),
             // Write XPRAM
             0x32 => self.xpram_write(data[0], data[1], data[2..].to_owned()),
             // Clock read TODO
-            0x38 => (Ok(()), Some(vec![0x00; 4])),
+            0x38 => self.clock_read(),
             // Read PRAM
             0x39 => self.pram_read(),
             // Read XPRAM
@@ -233,7 +248,7 @@ impl Pmgr {
             // Read modem TODO
             0x58 => (Ok(()), Some(vec![0x00])),
             // Read battery with update (unused but valid command)
-            0x60..=0x67 | 0x6A..=0x6F => todo!(),
+            //0x60..=0x67 | 0x6A..=0x6F => todo!(),
             // Read battery
             0x68 => self.battery_read(),
             // Read battery with update
@@ -242,16 +257,16 @@ impl Pmgr {
             0x70 => todo!(),
             // Read interrupts TODO
             0x78 => self.read_interrupts(),
-            // Set wake up time
-            0x80 => todo!(),
-            // Clear wake up time
-            0x82 => todo!(),
-            // Read wake up time
-            0x88 => todo!(),
+            // Set wake up time TODO
+            0x80 => self.wake_set(data[0..3].to_owned()),
+            // Clear wake up time TODO
+            0x82 => self.wake_clear(),
+            // Read wake up time TODO
+            0x88 => self.wake_read(),
             // Set sound TODO
-            0x90 => (Ok(()), None),
+            0x90 => self.sound_set(),
             // Read sound TODO
-            0x98 => (Ok(()), Some(vec![0x00])),
+            0x98 => self.sound_read(),
             // Write internal memory
             0xE0 => todo!(),
             // Read internal memory
@@ -285,9 +300,9 @@ impl Pmgr {
         }
     }
 
-    fn power_control_get(&mut self) -> Result<Byte> {
+    fn power_control_get(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
         self.length = 0x01;
-        Ok(self.power_plane.0 & 0x7F)
+        (Ok(()), Some(vec![self.power_plane.0 & 0x7F]))
     }
 
     fn adb(&mut self, cmd: Byte, flags: Byte, len: Byte, data: Vec<Byte>) -> (Result<()>, Option<Vec<Byte>>) {
@@ -301,7 +316,7 @@ impl Pmgr {
         let Some(device) = self.adb_devices.iter_mut().find(|d| d.get_address() == (cmd >> 4)) else {
             return (Ok(()), None);
         };
-        match cmd & 0x0D {
+        match cmd & 0x0F {
             0x00 => {
                 for dev in &mut self.adb_devices {
                     dev.reset();
@@ -311,12 +326,32 @@ impl Pmgr {
                 device.flush();
             }
             0x08 => {
+            0x08 | 0x0A => {
                 device.listen(cmd & 3, &data[1..]);
             }
             0x0C => {
                 self.adb_response = device.talk(cmd & 3);
+                if (flags & 0x04) == 4 {
+                    if device.get_address() == 0x03 {
+                        self.auto_poll3 = true;
+                    }
+                    if device.get_address() == 0x02 {
+                        self.auto_poll2 = true;
+                    }
+                }
             }
-            _ => {}
+            0x0D => {
+                self.adb_response = device.talk(cmd & 3);
+            }
+            0x0E => {
+                self.adb_response = device.talk(cmd & 3);
+            }
+            0x0F => {
+                self.adb_response = device.talk(cmd & 3);
+            }
+            _ => {
+                println!("Unknown ADB command: {:X}", cmd);
+            }
         }
         (Ok(()), None)
     }
@@ -332,16 +367,27 @@ impl Pmgr {
         // Find device with srq
         if self.adb_status.srq() {
             let Some(device) = self.adb_devices.iter_mut().find(|d| d.get_srq()) else {
+                self.adb_status.set_srq(false);
                 return (Ok(()), None);
             };
+            self.current_adb_device = device.get_address() as usize;
             self.adb_response = device.talk(0);
+            self.last_adb = (self.last_adb & 0x0F) | (self.current_adb_device << 4) as u8;
         }
-        let response = self.adb_response.pop_at(0).unwrap_or(0);
-        let length = 1;
+        let test: Vec<u8> = self.adb_response.to_vec();
+        let length = test.len() as Byte;
+
 
         self.interrupt_flags.set_adbint(false);
         self.length = 3 + length;
         (Ok(()), Some(vec![self.last_adb, self.adb_status.0, length, response]))
+        let mut result = vec![self.last_adb, self.adb_status.0, length];
+        result.extend(test);
+        (Ok(()), Some(result))
+    }
+
+    fn clock_set(&mut self, val: Byte) -> (Result<()>, Option<Vec<Byte>>) {
+        (Ok(()), None)
     }
 
     fn pram_write(&mut self, data: Vec<Byte>) -> (Result<()>, Option<Vec<Byte>>) {
@@ -371,13 +417,17 @@ impl Pmgr {
         }
     }
 
-    // Read the first 20 bytes of PRAM
+    fn clock_read(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        (Ok(()), Some(vec![0x00; 4]))
+    }
+
+    /// Read the first 20 bytes of PRAM
     fn pram_read(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
         self.length = 20;
         (Ok(()), Some(self.pram[0..20].to_owned()))
     }
 
-    // Read XPRAM
+    /// Read XPRAM
     fn xpram_read(&mut self, loc: Byte, len: Byte) -> (Result<()>, Option<Vec<Byte>>) {
         self.length = len;
         match loc + len - 1 {
@@ -395,7 +445,7 @@ impl Pmgr {
         }
     }
 
-    // Set contrast (not implemented)
+    /// Set contrast
     fn contrast_set(&mut self, val: Byte) -> Result<()> {
         match val {
             0x00..=0x1F => {
@@ -406,7 +456,7 @@ impl Pmgr {
         }
     }
 
-    // Read contrast (not implemented)
+    /// Read contrast
     fn contrast_get(&mut self) -> Result<Byte> {
         self.length = 0x01;
         Ok(self.contrast)
@@ -435,7 +485,7 @@ impl Pmgr {
         (Ok(()), Some(vec![interrupt_flags]))
     }
 
-    fn wake_set(&mut self, time: Byte) -> (Result<()>, Option<Vec<Byte>>) {
+    fn wake_set(&mut self, time: Vec<Byte>) -> (Result<()>, Option<Vec<Byte>>) {
         // TODO
         self.unknown_flags.set_wake_time_on(true);
         (Ok(()), None)
@@ -451,6 +501,16 @@ impl Pmgr {
         if !self.unknown_flags.wake_time_on() {
 
         }
+        (Ok(()), Some(vec![0x00, 0x00, 0x00, 0x00, 0x00]))
+    }
+
+    fn sound_set(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        // TODO
+        (Ok(()), None)
+    }
+
+    fn sound_read(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+        // TODO
         (Ok(()), Some(vec![0x00]))
     }
 
