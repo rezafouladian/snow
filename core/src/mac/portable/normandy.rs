@@ -90,7 +90,7 @@ impl BusMember<Address> for Normandy {
         match addr {
             // SLIM adapter ROM
             0xE0_0000..=0xE0_FFFF => {
-                Some(0x00)
+                Some(self.slim_rom[addr as usize])
             }
             0xF0_0000..=0xF0_FFFF => {
                 if self.slim_adapter.installed() {

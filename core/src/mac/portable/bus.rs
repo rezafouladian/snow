@@ -225,6 +225,8 @@ where
             0x0090_0000..=0x009F_FFFF => {
                 Some(*self.rom.get(addr as usize & self.rom_mask).unwrap_or(&0xFF))
             }
+            0x00A0_0000..=0x00DF_FFFF => None,
+            0x00E0_0000..=0x00EF_FFFF => self.normandy.read(addr),
             // SLIM/Normandy
             0x00F0_0000..=0x00F0_FFFF => self.normandy.read(addr),
             // SWIM
