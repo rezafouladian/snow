@@ -115,8 +115,6 @@ pub struct Pmgr {
 
     /// The last ADB command
     last_adb: Byte,
-    /// If ADB is initialized
-    adb_ready: bool,
 
     adb_devices: Vec<AdbDeviceInstance>,
     adb_response: AdbDeviceResponse,
@@ -124,21 +122,23 @@ pub struct Pmgr {
 
     battery_level: u8,
 
+    /// Modem port A or B (true = A)
     modem_ab: bool,
 
+    /// Current state of the handshake state machine
     state: State,
 
     timer1: usize,
 
     /// Whether the command is a read or write
     read: bool,
+    /// The power manager command
     cmd: Byte,
+    /// Length of data to send or receive
     length: Byte,
     data_pointer: usize,
     data: Vec<Byte>,
     wait_count: usize,
-
-    current_adb_device: usize,
 
     pub(crate) pmreq: bool,
     pub(crate) pmack: bool,
@@ -174,7 +174,6 @@ impl Pmgr {
             wake_time: [0x00; 4],
 
             last_adb: 0x00,
-            adb_ready: false,
             adb_srq: false,
 
             adb_devices: vec![],
@@ -203,8 +202,6 @@ impl Pmgr {
             onesec_latch: false,
 
             interrupt: false,
-
-            current_adb_device: 0x00,
 
             adb_data_length: 0x00,
             adb_data: vec![0; 2],
@@ -359,7 +356,6 @@ impl Pmgr {
 
         let mut result = vec![self.last_adb, self.adb_status.0, self.adb_data_length];
         result.extend(self.adb_response.to_owned());
-        println!("ADB response: {:?}", result);
         (Ok(()), Some(result))
     }
 
@@ -649,10 +645,6 @@ impl Pmgr {
     {
         self.adb_devices.push(Box::new(device));
     }
-    
-    pub(crate) fn onesec(&mut self) {
-        
-    }
 
     pub(crate) fn reset(&mut self) {
         self.state = State::Idle;
@@ -661,7 +653,6 @@ impl Pmgr {
         self.length = 0x00;
         self.pmack = true;
         self.pmreq = true;
-        self.adb_ready = false;
         self.adb_status.set_srq(false);
         self.interrupt_flags.set_adbint(false);
     }
@@ -669,16 +660,6 @@ impl Pmgr {
 
 impl Tickable for Pmgr {
     fn tick(&mut self, ticks: Ticks) -> Result<Ticks> {
-        match self.timer1 {
-            1 => {
-                self.timer1 -= 1;
-            }
-            0 => {}
-            _ => {
-                self.timer1 -= 1;
-            }
-        }
-
         if self.onesec & ! self.onesec_latch {
             self.time += 1;
             self.onesec_latch = true;
