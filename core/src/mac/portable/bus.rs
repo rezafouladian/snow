@@ -64,7 +64,7 @@ pub struct MacPortableBus<TRenderer: Renderer> {
     progkey_pressed: LatchingEvent,
 
     mouse_enabled: bool,
-    pub pmgr: Pmgr,
+    pub(crate) pmgr: Pmgr,
     normandy: Normandy,
 }
 
@@ -497,6 +497,7 @@ where
         self.pmgr.a_out = self.via.a_out.0;
         self.pmgr.a_in = self.via.a_in.0;
         self.pmgr.pmreq = self.via.b_out.pmreq();
+        self.pmgr.onesec = self.via.ifr.onesec();
         self.pmgr.tick(1)?;
         self.via.b_in.set_pmack(self.pmgr.pmack);
         self.via.a_in.0 = self.pmgr.a_in;
@@ -561,7 +562,7 @@ where
         use crate::dbgprop_nest;
         use crate::debuggable::*;
 
-        let mut result = vec![
+        let result = vec![
             //dbgprop_nest!("Apple Desktop Bus", self.via.adb),
             dbgprop_nest!("Apple Sound Chip", self.asc),
             dbgprop_nest!("SCSI controller (NCR 5380)", self.scsi),

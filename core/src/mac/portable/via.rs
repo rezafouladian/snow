@@ -7,7 +7,6 @@ use crate::debuggable::DebuggablePropertyValue;
 use crate::debuggable::{Debuggable, DebuggableProperties};
 use crate::types::{Byte, Field16};
 use crate::{dbgprop_bool, dbgprop_byte_bin, dbgprop_group, dbgprop_udec, dbgprop_word};
-use num_traits::ops::overflowing::OverflowingSub;
 use proc_bitfield::bitfield;
 use crate::tickable::{Tickable, Ticks};
 use anyhow::Result;
