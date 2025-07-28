@@ -516,7 +516,7 @@ where
         if self.progkey_pressed.get_clear() {
             return Some(4);
         }
-        if self.scc.get_irq() {
+        if self.scc.get_irq() | self.asc.get_irq() {
             return Some(2);
         }
         if self.via.ifr.0 & self.via.ier.0 != 0 {
