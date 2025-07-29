@@ -49,7 +49,7 @@ impl AdbDevice for AdbMouse {
                     while !self.button_recv.is_empty() {
                         button = self.button_recv.recv().unwrap();
                     }
-                    AdbDeviceResponse::from_iter([if button { 0x00_u8 } else { 0x80_u8 }, 0x00_u8])
+                    AdbDeviceResponse::from_iter([if button { 0x00_u8 } else { 0x80_u8 }, 0x80_u8])
                 } else {
                     AdbDeviceResponse::default()
                 }
