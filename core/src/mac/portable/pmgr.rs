@@ -64,6 +64,7 @@ bitfield! {
         autopoll: bool @ 2,
         srq: bool @ 3,
         noreply: bool @ 4,
+        dir: bool @ 6,
         error: bool @ 7,
     }
 }
@@ -150,6 +151,8 @@ pub struct Pmgr {
 
     adb_data_length: Byte,
     adb_data: Vec<Byte>,
+    adb_auto_poll: u8,
+    adb_ready: bool,
 }
 
 impl Pmgr {
@@ -205,6 +208,8 @@ impl Pmgr {
 
             adb_data_length: 0x00,
             adb_data: vec![0; 2],
+            adb_auto_poll: 0x00,
+            adb_ready: false,
 
             time: Local::now()
                 .naive_local()
@@ -221,36 +226,35 @@ impl Pmgr {
     fn cmd(&mut self, cmd: Byte, len: Byte, data: Vec<Byte>) -> (Result<()>, Option<Vec<Byte>>) {
         match cmd {
             // Power control
-            0x10 => self.power_control_set(data[0]),
+            0x10..=0x17 => self.power_control_set(data[0]),
             // Power status
-            0x18 => self.power_control_get(),
-            0x1B => self.power_control_get(),
+            0x18..=0x1F => self.power_control_get(),
             // ADB command
             0x20 => self.adb_cmd(data[0], data[1], data[2], data[3..].to_owned()),
-            // ADB off TODO
+            // ADB off
             0x21 => self.adb_off(),
             // ADB status
             0x28 => self.adb_status(),
-            // Clock set TODO
+            // Clock set
             0x30 => self.clock_set(data.to_vec()),
             // Write PRAM
             0x31 => self.pram_write(data[0..].to_owned()),
             // Write XPRAM
-            0x32 => self.xpram_write(data[0], data[1], data[2..].to_owned()),
-            // Clock read TODO
+            0x32..=0x37 => self.xpram_write(data[0], data[1], data[2..].to_owned()),
+            // Clock read
             0x38 => self.clock_read(),
             // Read PRAM
             0x39 => self.pram_read(),
             // Read XPRAM
-            0x3A => self.xpram_read(data[0], data[1]),
+            0x3A..=0x3F => self.xpram_read(data[0], data[1]),
             // Set contrast
-            0x40 => self.contrast_set(data[0]),
+            0x40..=0x47 => self.contrast_set(data[0]),
             // Read contrast
-            0x48 => self.contrast_get(),
+            0x48..=0x4F => self.contrast_get(),
             // Set modem
-            0x50 => self.modem_set(data[0]),
+            0x50..=0x57 => self.modem_set(data[0]),
             // Read modem
-            0x58 => self.modem_get(),
+            0x58..=0x5F => self.modem_get(),
             // Read battery
             0x68 => self.battery_read(),
             // Read battery with update
@@ -264,11 +268,13 @@ impl Pmgr {
             // Clear wake up time
             0x82 => self.wake_clear(),
             // Read wake up time
-            0x88 => self.wake_read(),
+            0x88..=0x8F => self.wake_read(),
+            // Possible invalid timer commands TODO
+            0x81 | 0x83..=0x87 => (Ok(()), None),
             // Set sound
-            0x90 => self.sound_set(),
+            0x90..=0x97 => self.sound_set(),
             // Read sound
-            0x98 => self.sound_read(),
+            0x98..=0x9F => self.sound_read(),
             // Write internal memory
             0xE0 => self.internal_write(data[0], data[1], data[2..].to_owned()),
             // Read internal memory
@@ -317,11 +323,19 @@ impl Pmgr {
         len: Byte,
         data: Vec<Byte>,
     ) -> (Result<()>, Option<Vec<Byte>>) {
+        println!(
+            "ADB command: {:X}, flags: {:X}, len: {:X}, data: {:?}",
+            cmd, flags, len, data
+        );
         self.last_adb = cmd;
         self.adb_status.0 = flags;
         self.adb_status.set_new(true);
         self.adb_data_length = len;
         self.adb_data = data[0..=len as usize].to_owned();
+
+        if self.adb_status.autopoll() {
+            self.adb_auto_poll = self.last_adb >> 4;
+        }
 
         self.interrupt_flags.set_adbint(false);
         self.adb_response.clear();
@@ -342,9 +356,17 @@ impl Pmgr {
 
         if self.adb_status.srq() {
             if let Some(device) = self.adb_devices.iter_mut().find(|d| d.get_srq()) {
-                self.adb_status.set_srq(false);
+                //self.adb_status.set_srq(false);
                 self.adb_response = device.talk(0);
-                self.last_adb = device.get_address() << 4 | 0x08;
+                self.last_adb = (device.get_address() << 4 | 0x0C) & 0xFC;
+                //self.adb_status.set_noreply(true);
+                //self.adb_status.set_init(false);
+                //self.adb_status.set_autopoll(true);
+                // if device.get_address() == self.adb_auto_poll {
+                //     self.adb_status.set_autopoll(true);
+                // } else {
+                //     self.adb_status.set_autopoll(false);
+                // }
             } else {
                 self.adb_status.set_noreply(true);
                 self.adb_status.set_srq(false);
@@ -353,6 +375,11 @@ impl Pmgr {
         self.adb_data_length = self.adb_response.len() as Byte;
 
         self.length = 3 + self.adb_data_length;
+
+        println!(
+            "ADB Status: {:X}, length: {:X}, Last CMD: {:X}, Data: {:?}",
+            self.adb_status.0, self.length, self.last_adb, self.adb_response
+        );
 
         let mut result = vec![self.last_adb, self.adb_status.0, self.adb_data_length];
         result.extend(self.adb_response.to_owned());
@@ -412,6 +439,7 @@ impl Pmgr {
     /// Read XPRAM
     fn xpram_read(&mut self, loc: Byte, len: Byte) -> (Result<()>, Option<Vec<Byte>>) {
         self.length = len;
+        //self.xpram[0x45] = 0x02;
         match loc + len - 1 {
             0x00..=0x7F => {
                 self.length = len;
@@ -598,10 +626,64 @@ impl Pmgr {
         (Ok(()), None)
     }
 
-    /// Process a pending ADB command
     fn adb_cmd_do(&mut self) {
+        // Mask out status
+        self.adb_status.0 &= 0b101;
+        // Check for init
+        if self.adb_status.init() {
+            self.adb_ready = true;
+        }
+        // Check for reset
+        if self.last_adb & 0x0F == 0 {
+            for dev in &mut self.adb_devices {
+                dev.reset();
+            }
+            self.adb_status.set_noreply(true);
+            self.interrupt_flags.set_adbint(true);
+        } else {
+            let cmd = self.last_adb;
+            let adb_data = self.adb_data.clone();
+            if let Some(device) = self.adb_find_device(cmd >> 4) {
+                match cmd & 0x0C {
+                    0x01 => {
+                        device.flush();
+                    }
+                    0x08 => {
+                        device.listen(cmd & 3, &adb_data[1..]);
+                    }
+                    0x0C => {
+                        self.adb_response = device.talk(cmd & 3);
+                    }
+                    _ => {
+                        println!("Unknown ADB command: {:X}", cmd);
+                    }
+                }
+                self.interrupt_flags.set_adbint(true);
+            }
+        }
+    }
+
+    fn adb_find_device(&mut self, address: Byte) -> Option<&mut AdbDeviceInstance> {
+        let Some(device) = self
+            .adb_devices
+            .iter_mut()
+            .find(|d| d.get_address() == (self.last_adb >> 4))
+        else {
+            self.interrupt_flags.set_adbint(true);
+            self.adb_status.set_noreply(true);
+            return None
+        };
+        Some(device)
+    }
+
+    /// Process a pending ADB command
+    fn adb_cmd_old(&mut self) {
         // Command input only takes bits 0 and 2
         self.adb_status.0 &= 0b101;
+        if self.adb_status.init() {
+            self.adb_ready = true;
+            self.interrupt_flags.set_adbint(true);
+        }
         // Check for a reset command
         if self.last_adb & 0x0F == 0 {
             for dev in &mut self.adb_devices {
@@ -610,9 +692,6 @@ impl Pmgr {
             self.adb_status.set_noreply(true);
             self.interrupt_flags.set_adbint(true);
             return;
-        }
-        if self.adb_status.init() {
-            self.interrupt_flags.set_adbint(true);
         }
         let Some(device) = self
             .adb_devices
@@ -637,6 +716,7 @@ impl Pmgr {
                 println!("Unknown ADB command: {:X}", self.last_adb);
             }
         }
+        self.interrupt_flags.set_adbint(true);
     }
 
     pub(crate) fn adb_add_device<T>(&mut self, device: T)
@@ -655,6 +735,7 @@ impl Pmgr {
         self.pmreq = true;
         self.adb_status.set_srq(false);
         self.interrupt_flags.set_adbint(false);
+        self.interrupt = false;
     }
 }
 
@@ -667,7 +748,7 @@ impl Tickable for Pmgr {
             self.onesec_latch = false;
         }
 
-        if self.interrupt_flags.0 != 0 {
+        if (self.interrupt_flags.0 != 0) & self.adb_ready {
             self.interrupt = true;
         } else {
             self.interrupt = false;
