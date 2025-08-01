@@ -153,6 +153,8 @@ pub struct Pmgr {
     adb_data: Vec<Byte>,
     adb_auto_poll: u8,
     adb_ready: bool,
+
+    last_adb_device: u8,
 }
 
 impl Pmgr {
@@ -210,6 +212,8 @@ impl Pmgr {
             adb_data: vec![0; 2],
             adb_auto_poll: 0x00,
             adb_ready: false,
+
+            last_adb_device: 0x00,
 
             time: Local::now()
                 .naive_local()
@@ -333,9 +337,9 @@ impl Pmgr {
         self.adb_data_length = len;
         self.adb_data = data[0..=len as usize].to_owned();
 
-        if self.adb_status.autopoll() {
-            self.adb_auto_poll = self.last_adb >> 4;
-        }
+        // if self.adb_status.autopoll() {
+        //     self.adb_auto_poll = self.last_adb >> 4;
+        // }
 
         self.interrupt_flags.set_adbint(false);
         self.adb_response.clear();
@@ -352,26 +356,8 @@ impl Pmgr {
     /// Get ADB status
     fn adb_status(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
         self.interrupt_flags.set_adbint(false);
-        self.adb_status.set_noreply(false);
+        //self.adb_status.set_noreply(false);
 
-        if self.adb_status.srq() {
-            if let Some(device) = self.adb_devices.iter_mut().find(|d| d.get_srq()) {
-                //self.adb_status.set_srq(false);
-                self.adb_response = device.talk(0);
-                self.last_adb = (device.get_address() << 4 | 0x0C) & 0xFC;
-                //self.adb_status.set_noreply(true);
-                //self.adb_status.set_init(false);
-                //self.adb_status.set_autopoll(true);
-                // if device.get_address() == self.adb_auto_poll {
-                //     self.adb_status.set_autopoll(true);
-                // } else {
-                //     self.adb_status.set_autopoll(false);
-                // }
-            } else {
-                self.adb_status.set_noreply(true);
-                self.adb_status.set_srq(false);
-            }
-        }
         self.adb_data_length = self.adb_response.len() as Byte;
 
         self.length = 3 + self.adb_data_length;
@@ -644,14 +630,14 @@ impl Pmgr {
             let cmd = self.last_adb;
             let adb_data = self.adb_data.clone();
             if let Some(device) = self.adb_find_device(cmd >> 4) {
-                match cmd & 0x0C {
+                match cmd & 0x0D {
                     0x01 => {
                         device.flush();
                     }
-                    0x08 => {
+                    0x08 | 0x09 => {
                         device.listen(cmd & 3, &adb_data[1..]);
                     }
-                    0x0C => {
+                    0x0C | 0x0D => {
                         self.adb_response = device.talk(cmd & 3);
                     }
                     _ => {
@@ -674,6 +660,38 @@ impl Pmgr {
             return None
         };
         Some(device)
+    }
+
+    fn adb_srq(&mut self) {
+        if self.adb_devices.iter().any(|d| d.get_srq()) & !self.interrupt_flags.adbint() {
+            if let Some(device) = self.adb_devices.iter_mut().find(|d| d.get_srq()) {
+                self.adb_response = device.talk(0);
+                self.last_adb = (device.get_address() << 4 | 0x0C) & 0xFC;
+                //self.adb_status.set_srq(true);
+                self.interrupt_flags.set_adbint(true);
+
+                if device.get_address() == self.last_adb_device {
+                    self.adb_status.set_noreply(false);
+                    self.adb_status.set_autopoll(true);
+                } else {
+                    self.last_adb_device = device.get_address();
+                    if self.last_adb_device == 3 {
+                        self.adb_status.set_autopoll(false);
+                        self.adb_status.set_noreply(false);
+                    } else {
+                        self.adb_status.set_autopoll(false);
+                        self.adb_status.set_noreply(true);
+                    }
+                }
+
+                //self.adb_status.set_autopoll(true);
+                //self.adb_status.set_dir(true);
+                println!("SRQ: {:?}", self.adb_response);
+            } else {
+                //self.adb_status.set_noreply(true);
+                self.adb_status.set_srq(false);
+            }
+        }
     }
 
     /// Process a pending ADB command
@@ -759,8 +777,7 @@ impl Tickable for Pmgr {
         }
 
         if self.adb_devices.iter().any(|d| d.get_srq()) & !self.interrupt_flags.adbint() {
-            self.interrupt_flags.set_adbint(true);
-            self.adb_status.set_srq(true);
+            self.adb_srq();
         }
 
         match self.state {
