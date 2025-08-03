@@ -24,11 +24,13 @@ bitfield! {
 
 bitfield! {
     pub struct InterruptFlags(u8): {
-        // ADB data waiting
+        /// ADB data waiting
         pub adbint: bool @ 0,
-        // Low battery
+        /// Low battery
         pub batint: bool @ 1,
+        /// Unimplemented temperature interrupt
         pub unimplemented: bool @ 2,
+        /// Power manager has been reset (does not generate interrupt)
         pub resetint: bool @ 3,
     }
 }
@@ -101,7 +103,10 @@ pub struct Pmgr {
     contrast: u8,
 
     /// PRAM storage
+    /// TODO: merge XPRAM and PRAM
     pram: [Byte; 20],
+    /// XPRAM storage
+    /// TODO: merge XPRAM and PRAM
     xpram: [Byte; 128],
 
     /// Power plane
@@ -227,6 +232,7 @@ impl Pmgr {
             new_adb_device: 0x00,
             srq_waiting: false,
 
+            // Initialize the time from the host computer clock
             time: Local::now()
                 .naive_local()
                 .signed_duration_since(
@@ -543,9 +549,10 @@ impl Pmgr {
         self.battery_read()
     }
 
+    /// Request to enter sleep mode
     fn sleep_request(&mut self, string: Vec<Byte>) -> (Result<()>, Option<Vec<Byte>>) {
         if string == b"MATT".to_vec() {
-            // Sleep now
+            // TODO Sleep now
         } else {
             self.cmd = 0xAA;
         }
@@ -599,6 +606,7 @@ impl Pmgr {
         (Ok(()), Some(vec![0x00]))
     }
 
+    /// Write to internal power manager memory
     fn internal_write(
         &mut self,
         _loch: Byte,
@@ -609,6 +617,7 @@ impl Pmgr {
         (Ok(()), None)
     }
 
+    /// Read from internal power manager memory
     fn internal_read(
         &mut self,
         _loch: Byte,
@@ -619,16 +628,19 @@ impl Pmgr {
         (Ok(()), None)
     }
 
+    /// Read the version number from the power manager
     fn version_read(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
         self.length = 0x02;
         (Ok(()), Some(vec![0x02, 0xB5]))
     }
 
+    /// Run power manager self tests
     fn self_test(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
         self.length = 0x01;
         (Ok(()), Some(vec![0x00]))
     }
 
+    /// Soft reset the power manager
     fn soft_reset(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
         self.length = 0x00;
         self.interrupt_flags.set_resetint(true);
@@ -687,6 +699,7 @@ impl Pmgr {
         Some(device)
     }
 
+    /// Handle ADB SRQ
     fn adb_srq(&mut self) {
         if self.adb_devices.iter().any(|d| d.get_srq()) & !self.interrupt_flags.adbint() {
             if let Some(device) = self.adb_devices.iter_mut().find(|d| d.get_srq()) {
@@ -705,6 +718,7 @@ impl Pmgr {
         }
     }
 
+    /// Add devices to the ADB device list
     pub(crate) fn adb_add_device<T>(&mut self, device: T)
     where
         T: AdbDevice + Send + 'static,
@@ -712,7 +726,9 @@ impl Pmgr {
         self.adb_devices.push(Box::new(device));
     }
 
+    /// Reset the power manager to a safe state for system startup
     pub(crate) fn reset(&mut self) {
+        // TODO: incomplete initialization
         self.state = State::Idle;
         self.read = false;
         self.cmd = 0x00;
