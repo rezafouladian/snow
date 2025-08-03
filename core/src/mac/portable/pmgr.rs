@@ -4,6 +4,7 @@ use crate::tickable::{Tickable, Ticks};
 use crate::types::Byte;
 use anyhow::{anyhow, Result};
 use chrono::{Local, NaiveDate};
+use log::warn;
 use proc_bitfield::bitfield;
 
 const DEFAULT_LOW_LEVEL: u16 = 590 - 512;
@@ -370,7 +371,6 @@ impl Pmgr {
     /// Get ADB status
     fn adb_status(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
         self.interrupt_flags.set_adbint(false);
-        //self.adb_status.set_noreply(false);
 
         self.adb_data_length = self.adb_response.len() as Byte;
 
@@ -383,8 +383,6 @@ impl Pmgr {
         } else {
             self.srq_waiting = false;
         }
-
-        //self.last_adb = (self.last_adb & 0x0F) | (self.last_adb_device << 4);
 
         println!(
             "ADB Status: {:X}, length: {:X}, Last CMD: {:X}, Data: {:?}",
@@ -414,6 +412,7 @@ impl Pmgr {
         (Ok(()), None)
     }
 
+    /// Write to extended PRAM
     fn xpram_write(
         &mut self,
         loc: Byte,
@@ -429,7 +428,7 @@ impl Pmgr {
             }
             _ => {
                 println!("Invalid XPRAM location: {:X}", loc);
-                (Err(anyhow!("Invalid XPRAM location")), None)
+                (Ok(()), None)
             }
         }
     }
@@ -459,8 +458,8 @@ impl Pmgr {
                 )
             }
             _ => {
-                println!("Invalid XPRAM location: {:X}", loc);
-                (Err(anyhow!("Invalid XPRAM location")), None)
+                warn!("Invalid XPRAM location: {:X}", loc);
+                (Ok(()), None)
             }
         }
     }
@@ -636,6 +635,7 @@ impl Pmgr {
         (Ok(()), None)
     }
 
+    /// Process a pending ADB command
     fn adb_cmd_do(&mut self) {
         // Mask out status
         self.adb_status.0 &= 0b101;
@@ -692,8 +692,6 @@ impl Pmgr {
             if let Some(device) = self.adb_devices.iter_mut().find(|d| d.get_srq()) {
                 self.adb_status.0 &= 0b101;
                 self.adb_response = device.talk(0);
-                //self.last_adb = (device.get_address() << 4 | 0x0C) & 0xFC;
-                //self.adb_status.set_srq(true);
                 self.interrupt_flags.set_adbint(true);
 
                 println!("SRQ: {:2X}", device.get_address());
@@ -701,89 +699,10 @@ impl Pmgr {
                 self.new_adb_device = device.get_address();
                 self.srq_waiting = true;
 
-
-                // if device.get_address() == self.last_adb >> 4 {
-                //
-                // } else {
-                //     self.adb_status.set_noreply(true);
-                //     self.adb_status.set_error(true);
-                //     self.adb_status.set_autopoll(true);
-                //     self.adb_status.set_srq(true);
-                //     //self.last_adb_device = device.get_address();
-                // }
-
-                // if device.get_address() == self.adb_auto_poll_dev >> 4 {
-                //     self.adb_status.set_autopoll(true);
-                // } else {
-                //     self.adb_status.set_autopoll(false);
-                //     self.adb_status.set_srq(true);
-                // }
-
-                // if device.get_address() == self.last_adb_device {
-                //     self.adb_status.set_noreply(false);
-                //     self.adb_status.set_autopoll(true);
-                // } else {
-                //     self.last_adb_device = device.get_address();
-                //     if self.last_adb_device == 3 {
-                //         self.adb_status.set_autopoll(false);
-                //         self.adb_status.set_noreply(false);
-                //     } else {
-                //         self.adb_status.set_autopoll(false);
-                //         self.adb_status.set_noreply(true);
-                //     }
-                // }
-
-                //self.adb_status.set_autopoll(true);
-                //self.adb_status.set_dir(true);
-                //println!("SRQ: {:?}", self.adb_response);
             } else {
-                //self.adb_status.set_noreply(true);
                 self.adb_status.set_srq(false);
             }
         }
-    }
-
-    /// Process a pending ADB command
-    fn adb_cmd_old(&mut self) {
-        // Command input only takes bits 0 and 2
-        self.adb_status.0 &= 0b101;
-        if self.adb_status.init() {
-            self.adb_ready = true;
-            self.interrupt_flags.set_adbint(true);
-        }
-        // Check for a reset command
-        if self.last_adb & 0x0F == 0 {
-            for dev in &mut self.adb_devices {
-                dev.reset();
-            }
-            self.adb_status.set_noreply(true);
-            self.interrupt_flags.set_adbint(true);
-            return;
-        }
-        let Some(device) = self
-            .adb_devices
-            .iter_mut()
-            .find(|d| d.get_address() == (self.last_adb >> 4))
-        else {
-            self.interrupt_flags.set_adbint(true);
-            self.adb_status.set_noreply(true);
-            return;
-        };
-        match self.last_adb & 0x0D {
-            0x01 => {
-                device.flush();
-            }
-            0x08 | 0x09 => {
-                device.listen(self.last_adb & 3, &self.adb_data[1..]);
-            }
-            0x0C | 0x0D => {
-                self.adb_response = device.talk(self.last_adb & 3);
-            }
-            _ => {
-                println!("Unknown ADB command: {:X}", self.last_adb);
-            }
-        }
-        self.interrupt_flags.set_adbint(true);
     }
 
     pub(crate) fn adb_add_device<T>(&mut self, device: T)
