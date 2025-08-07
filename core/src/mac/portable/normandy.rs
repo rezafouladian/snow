@@ -69,10 +69,10 @@ impl Normandy {
             slim_mapper: vec![SlimMapper(0); 16],
 
             slim_adapter: SlimAdapter(0),
-            slim1_status: SlimStatus(0),
+            slim1_status: SlimStatus(0x08),
             slim1_eject: SlimEject(0x08),
             slim1_protect: SlimProtect(0),
-            slim2_status: SlimStatus(0),
+            slim2_status: SlimStatus(0x08),
             slim2_eject: SlimEject(0x08),
             slim2_protect: SlimProtect(0),
 
@@ -90,7 +90,7 @@ impl BusMember<Address> for Normandy {
         match addr {
             // SLIM adapter ROM
             0xE0_0000..=0xE0_FFFF => {
-                Some(self.slim_rom[addr as usize])
+                Some(0x00)
             }
             0xF0_0000..=0xF0_FFFF => {
                 if self.slim_adapter.installed() {
