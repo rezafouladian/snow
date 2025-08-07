@@ -1,7 +1,7 @@
 use crate::widgets::watchpoints::WatchpointType;
 use snow_core::bus::Address;
 
-pub static TRAPS: [(u16, &str); 872] = [
+pub static TRAPS: [(u16, &str); 879] = [
     // QuickDraw
     (0xA817, "CopyMask"),
     (0xA837, "MeasureText"),
@@ -558,6 +558,8 @@ pub static TRAPS: [(u16, &str); 872] = [
     (0xA021, "GetPtrSize"),
     (0xA122, "NewHandle"),
     (0xA322, "NewHandleClear"),
+    (0xA522, "NewHandleSys"),
+    (0xA722, "NewHandleSysClear"),
     (0xA023, "DisposHandle"),
     (0xA023, "DisposeHandle"),
     (0xA024, "SetHandleSize"),
@@ -582,6 +584,9 @@ pub static TRAPS: [(u16, &str); 872] = [
     (0xA030, "OSEventAvail"),
     (0xA031, "GetOSEvent"),
     (0xA032, "FlushEvents"),
+    (0xAAFA, "InitApplication"),
+    (0xABF7, "SynchIdleTime"),
+    (0xAAFB, "CleanupApplication"),
     (0xA033, "VInstall"),
     (0xA034, "VRemove"),
     (0xA035, "OffLine"),
@@ -603,6 +608,8 @@ pub static TRAPS: [(u16, &str); 872] = [
     (0xA647, "SetToolTrapAddress"),
     (0xA746, "GetToolBoxTrapAddress"),
     (0xA647, "SetToolBoxTrapAddress"),
+    (0xA546, "GetTrapWordAddress"),
+    (0xA447, "SetTrapWordAddress"),
     (0xA148, "PtrZone"),
     (0xA049, "HPurge"),
     (0xA04A, "HNoPurge"),
