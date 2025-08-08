@@ -89,8 +89,9 @@ where
         extension_rom: Option<&[u8]>,
         renderer: TRenderer,
         mouse_enabled: bool,
+        ram_size: Option<usize>,
     ) -> Self {
-        let ram_size = model.ram_size();
+        let ram_size = ram_size.unwrap_or_else(|| model.ram_size_default());
 
         if extension_rom.is_some() {
             log::info!("Extension ROM present");

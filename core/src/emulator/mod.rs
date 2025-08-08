@@ -292,7 +292,7 @@ impl Emulator {
                 });
 
                 // Initialize bus and CPU
-                let bus = MacPortableBus::new(model, rom, extension_rom, renderer, mouse_enabled);
+                let bus = MacPortableBus::new(model, rom, extension_rom, renderer, mouse_enabled, ram_size);
                 let mut cpu = Box::new(CpuM68000::new(bus));
                 assert_eq!(cpu.get_type(), model.cpu_type());
 
