@@ -1,10 +1,11 @@
-//! Normandy decoder implementation for the Macintosh Portable and
-//! PowerBook 100.
+//! Normandy decoder implementation for the Macintosh Portable and PowerBook 100.
 
 use proc_bitfield::bitfield;
 use crate::bus::{Address, BusMember};
 use crate::dbgprop_bool;
 use crate::debuggable::{Debuggable, DebuggableProperties};
+use crate::tickable::{Tickable, Ticks};
+use anyhow::{anyhow, Result};
 
 bitfield! {
     #[derive(Clone)]
@@ -68,7 +69,7 @@ impl Normandy {
             slim_dtack: false,
             slim_mapper: vec![SlimMapper(0); 16],
 
-            slim_adapter: SlimAdapter(0),
+            slim_adapter: SlimAdapter(0x00),
             slim1_status: SlimStatus(0x08),
             slim1_eject: SlimEject(0x08),
             slim1_protect: SlimProtect(0),
@@ -192,6 +193,12 @@ impl BusMember<Address> for Normandy {
             }
             _ => { None }
         }
+    }
+}
+
+impl Tickable for Normandy {
+    fn tick(&mut self, ticks: Ticks) -> Result<Ticks> {
+        Ok(ticks)
     }
 }
 
