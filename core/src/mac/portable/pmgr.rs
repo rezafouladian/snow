@@ -1,3 +1,5 @@
+//! Power manager implementation for the Macintosh Portable and PowerBook 100.
+
 use crate::debuggable::Debuggable;
 use crate::mac::adb::{AdbDevice, AdbDeviceInstance, AdbDeviceResponse};
 use crate::tickable::{Tickable, Ticks};
@@ -166,7 +168,6 @@ pub struct Pmgr {
     adb_auto_poll_timer: usize,
     new_adb_device: u8,
     srq_waiting: bool,
-
 }
 
 impl Pmgr {
@@ -347,7 +348,10 @@ impl Pmgr {
     ) -> (Result<()>, Option<Vec<Byte>>) {
         println!(
             "ADB command: {:X}, flags: {:X}, len: {:X}, data: {:?}",
-            cmd, flags, len, &data[0..len as usize]
+            cmd,
+            flags,
+            len,
+            &data[0..len as usize]
         );
         self.last_adb = cmd;
         self.adb_status.0 = flags;
@@ -478,7 +482,7 @@ impl Pmgr {
                 (Ok(()), None)
             }
             // Bad contrast value
-            _ => { (Ok(()), None) },
+            _ => (Ok(()), None),
         }
     }
 
@@ -488,6 +492,7 @@ impl Pmgr {
         (Ok(()), Some(vec![self.contrast]))
     }
 
+    /// Set modem controls
     fn modem_set(&mut self, val: Byte) -> (Result<()>, Option<Vec<Byte>>) {
         // TODO
         if val & 0x01 == 0x01 {
@@ -510,6 +515,7 @@ impl Pmgr {
         (Ok(()), None)
     }
 
+    /// Read modem controls
     fn modem_get(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
         self.length = 0x01;
 
@@ -694,7 +700,7 @@ impl Pmgr {
         else {
             self.interrupt_flags.set_adbint(true);
             self.adb_status.set_noreply(true);
-            return None
+            return None;
         };
         Some(device)
     }
@@ -711,7 +717,6 @@ impl Pmgr {
 
                 self.new_adb_device = device.get_address();
                 self.srq_waiting = true;
-
             } else {
                 self.adb_status.set_srq(false);
             }
@@ -743,7 +748,7 @@ impl Pmgr {
 
 impl Tickable for Pmgr {
     fn tick(&mut self, ticks: Ticks) -> Result<Ticks> {
-        if self.onesec & ! self.onesec_latch {
+        if self.onesec & !self.onesec_latch {
             self.time += 1;
             self.onesec_latch = true;
         } else if !self.onesec & self.onesec_latch {
@@ -1007,8 +1012,10 @@ impl Debuggable for Pmgr {
             ),
             dbgprop_bool!("Power Manager Interrupt", self.interrupt),
             dbgprop_bool!("ADB SRQ", self.adb_devices.iter().any(|d| d.get_srq())),
-            dbgprop_string!("ADB Autopoll Device", format!("{:X}", self.adb_auto_poll_dev)),
-
+            dbgprop_string!(
+                "ADB Autopoll Device",
+                format!("{:X}", self.adb_auto_poll_dev)
+            ),
         ]
     }
 }
