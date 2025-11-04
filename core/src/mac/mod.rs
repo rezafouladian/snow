@@ -104,7 +104,8 @@ impl MacModel {
     pub const fn ram_size_options(self) -> &'static [usize] {
         match self {
             Self::Early128K => &[128 * 1024],
-            Self::Early512K | Self::Early512Ke => &[512 * 1024],
+            Self::Early512K => &[512 * 1024],
+            Self::Early512Ke => &[128 * 1024, 512 * 1024],
             Self::Plus | Self::SE | Self::SeFdhd | Self::Classic => {
                 &[1024 * 1024, 2048 * 1024, 4096 * 1024]
             }
@@ -130,6 +131,7 @@ impl MacModel {
                     2 * 1024 * 1024,
                     4 * 1024 * 1024,
                     5 * 1024 * 1024,
+                    6 * 1024 * 1024,
                     8 * 1024 * 1024,
                     9 * 1024 * 1024,
                 ]
@@ -219,6 +221,23 @@ impl MacModel {
             | Self::Classic 
             | Self::Portable => M68000,
             Self::MacII | Self::MacIIFDHD => M68020,
+        }
+    }
+
+    pub fn via1_a_in(self) -> via::RegisterA {
+        match self {
+            Self::Early128K
+            | Self::Early512K
+            | Self::Early512Ke
+            | Self::Plus
+            | Self::SE
+            | Self::SeFdhd
+            | Self::Portable => via::RegisterA(0xFF),
+            Self::Classic => {
+                // Mac Classic has a pulldown (R79) as model identifier
+                via::RegisterA(0xFF).with_sndpg2(false)
+            }
+            Self::MacII | Self::MacIIFDHD => via::RegisterA(0),
         }
     }
 }

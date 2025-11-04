@@ -214,7 +214,7 @@ pub enum SccCh {
     B = 1,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct SccChannel {
     sdlc: bool,
     hunt: bool,
@@ -222,9 +222,12 @@ struct SccChannel {
     rx_enable: bool,
     ext_ip: bool,
     tx_ip: bool,
-    rx_ie: bool,
     tx_ie: bool,
+    rx_ip: bool,
+    rx_ie: bool,
     ext_ie: bool,
+    dcd: bool,
+    dcd_ie: bool,
 
     reg15: u8,
 
@@ -232,10 +235,8 @@ struct SccChannel {
     rx_queue: VecDeque<u8>,
 }
 
-impl SccChannel {}
-
 /// Zilog Z8530 Serial Communications Controller
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct Scc {
     /// Channels
     /// 0 = Channel A, 1 = Channel B
@@ -263,7 +264,7 @@ impl Scc {
 
     fn write_data(&mut self, ch: SccCh, val: u8) {
         let chi = ch.to_usize().unwrap();
-        if self.ch[chi].tx_enable {
+        if self.ch[chi].tx_enable && self.ch[chi].tx_ie && self.mic.mie() {
             self.ch[chi].tx_ip = true;
         }
         self.ch[chi].tx_queue.push_back(val);
@@ -297,7 +298,8 @@ impl Scc {
                 .with_rx_char(!self.ch[chi].rx_queue.is_empty())
                 .with_tx_empty(true)
                 .with_tx_underrun(true)
-                .with_sync_hunt(self.ch[chi].hunt),
+                .with_sync_hunt(self.ch[chi].hunt)
+                .with_dcd(self.ch[chi].dcd),
             (1 | 5, _) => *RdReg1::default().with_all_sent(true),
             (2 | 6, SccCh::B) => {
                 // Modified interrupt vector
@@ -317,10 +319,10 @@ impl Scc {
             (3, SccCh::A) => *RdReg3::default()
                 .with_b_ext_status_ip(self.ch[1].ext_ip)
                 .with_b_tx_ip(self.ch[1].tx_ip)
-                .with_b_rx_ip(!self.ch[1].rx_queue.is_empty())
+                .with_b_rx_ip(self.ch[1].rx_ip)
                 .with_a_ext_status_ip(self.ch[0].ext_ip)
                 .with_a_tx_ip(self.ch[0].tx_ip)
-                .with_a_rx_ip(!self.ch[0].rx_queue.is_empty()),
+                .with_a_rx_ip(self.ch[0].rx_ip),
             (10, _) => {
                 // Misc. status bits
                 0
@@ -361,6 +363,9 @@ impl Scc {
                     SccCommand::ResetTxInt => {
                         self.ch[chi].tx_ip = false;
                     }
+                    SccCommand::IntNextRx => {
+                        self.ch[chi].rx_ip = false;
+                    }
                     _ => {
                         warn!("unimplemented command {:?}", r.cmdcode().unwrap());
                     }
@@ -397,7 +402,9 @@ impl Scc {
                 // DPLL/baudrate generator
             }
             15 => {
-                self.ch[chi].sdlc = WrReg15(val).sdlc_en();
+                let wrval = WrReg15(val);
+                self.ch[chi].sdlc = wrval.sdlc_en();
+                self.ch[chi].dcd_ie = wrval.dcd();
                 self.ch[chi].reg15 = val & !0b101;
             }
             _ => {
@@ -411,7 +418,15 @@ impl Scc {
     }
 
     pub fn push_rx(&mut self, ch: SccCh, data: &[u8]) {
-        self.ch[ch.to_usize().unwrap()].rx_queue.extend(data.iter());
+        let chi = ch.to_usize().unwrap();
+        if !self.ch[chi].rx_enable {
+            return;
+        }
+
+        self.ch[chi].rx_queue.extend(data.iter());
+        if self.mic.mie() && self.ch[chi].rx_ie {
+            self.ch[chi].rx_ip = true;
+        }
     }
 
     pub fn take_tx(&mut self, ch: SccCh) -> Vec<u8> {
@@ -430,6 +445,26 @@ impl Scc {
         };
         let ctrl = addr & (1 << 1) == 0;
         (ch, ctrl)
+    }
+
+    pub fn set_dcd(&mut self, ch: SccCh, val: bool) {
+        let chi = ch.to_usize().unwrap();
+
+        if self.ch[chi].dcd == val {
+            // No change in state
+            return;
+        }
+
+        if self.ch[chi].dcd_ie {
+            // Trigger interrupt
+            self.ch[chi].ext_ip = true;
+        }
+        self.ch[chi].dcd = val;
+    }
+
+    pub fn get_dcd(&self, ch: SccCh) -> bool {
+        let chi = ch.to_usize().unwrap();
+        self.ch[chi].dcd
     }
 }
 

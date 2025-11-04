@@ -174,9 +174,13 @@ where
         match addr {
             // RAM
             0x0000_0000..=0x008F_FFFF => {
-                let idx = addr as usize;
-                self.ram_dirty.insert(idx / RAM_DIRTY_PAGESIZE);
-                Some(self.ram[idx] = val)
+                if addr < self.ram.len() as u32 {
+                    let idx = addr as usize;
+                    self.ram_dirty.insert(idx / RAM_DIRTY_PAGESIZE);
+                    Some(self.ram[idx] = val)
+                } else {
+                    Some(())
+                }
             }
             // ROM
             0x0090_0000..=0x009F_FFFF => Some(()),
@@ -221,7 +225,14 @@ where
 
     fn read_normal(&mut self, addr: Address) -> Option<Byte> {
         let result = match addr {
-            0x0000_0000..=0x008F_FFFF => Some(self.ram[addr as usize]),
+            0x0000_0000..=0x008F_FFFF => {
+                if addr < self.ram.len() as u32 {
+                    Some(self.ram[addr as usize])
+                } else {
+                    Some(0x00)
+                }
+
+            },
             // ROM
             0x0090_0000..=0x009F_FFFF => {
                 Some(*self.rom.get(addr as usize & self.rom_mask).unwrap_or(&0xFF))
@@ -278,6 +289,9 @@ where
         self.mouse_ready = true;
 
         if relx != 0 || rely != 0 {
+            // Stop the system from idling
+            self.normandy.idle_speed = false;
+
             let new_x = old_x.wrapping_add_signed(relx);
             let new_y = old_y.wrapping_add_signed(rely);
 

@@ -355,7 +355,10 @@ impl Pmgr {
         );
         self.last_adb = cmd;
         self.adb_status.0 = flags;
-        self.adb_status.set_new(true);
+        // Do not respond to autopoll with status
+        if flags != 0b100 {
+            self.adb_status.set_new(true);
+        }
         self.adb_data_length = len;
         self.adb_data = data[0..len as usize].to_owned();
 
@@ -380,10 +383,68 @@ impl Pmgr {
 
     /// Get ADB status
     fn adb_status(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
+
+        let mut adb_response: AdbDeviceResponse = AdbDeviceResponse::new();
+
+        self.interrupt_flags.set_adbint(false);
+
+        if self.srq_waiting {
+            if let Some(device) = self.adb_devices.iter_mut().find(|d | d.get_srq()) {
+                if device.get_address() != self.last_adb >> 4 {
+                    self.adb_status.set_noreply(true);
+                    self.adb_status.set_error(true);
+                    self.adb_status.set_srq(true);
+                    println!("ADB device changed");
+                    self.length = 3;
+                    (Ok(()), Some(vec![self.last_adb, self.adb_status.0, 3]))
+                } else {
+                    self.srq_waiting = false;
+                    adb_response = device.talk(0);
+                    self.adb_data_length = adb_response.len() as Byte;
+                    self.length = 3 + self.adb_data_length;
+                    let mut result = vec![self.last_adb, self.adb_status.0, adb_response.len() as Byte];
+                    result.extend(adb_response.to_owned());
+                    println!("ADB response: {:?}", adb_response);
+                    (Ok(()), Some(result))
+                }
+            } else {
+                self.srq_waiting = false;
+                println!("No SRQ when expected");
+                self.adb_data_length = self.adb_response.len() as Byte;
+                self.length = 3 + self.adb_data_length;
+                let mut result = vec![self.last_adb, self.adb_status.0, self.adb_response.len() as Byte];
+                result.extend(self.adb_response.to_owned());
+                (Ok(()), Some(result))
+                //(Ok(()), Some(vec![self.last_adb, self.adb_status.0, 3]))
+            }
+        } else {
+            println!("No SRQ");
+            self.adb_data_length = self.adb_response.len() as Byte;
+            self.length = 3 + self.adb_data_length;
+            let mut result = vec![self.last_adb, self.adb_status.0, self.adb_response.len() as Byte];
+            result.extend(self.adb_response.to_owned());
+            (Ok(()), Some(result))
+            //(Ok(()), Some(vec![self.last_adb, self.adb_status.0, 3]))
+        }
+
+
+
+        //self.adb_data_length = self.adb_response.len() as Byte;
+
+        //self.length = 3 + self.adb_data_length;
+
+
+
+        //let mut result = vec![self.last_adb, self.adb_status.0, self.adb_response.len() as Byte];
+        //result.extend(self.adb_response.to_owned());
+        //(Ok(()), Some(result))
+    }
+
+    /// Get ADB status
+    fn adb_status_old(&mut self) -> (Result<()>, Option<Vec<Byte>>) {
         self.interrupt_flags.set_adbint(false);
 
         self.adb_data_length = self.adb_response.len() as Byte;
-
         self.length = 3 + self.adb_data_length;
 
         if (self.new_adb_device != self.last_adb >> 4) & self.srq_waiting {
@@ -672,6 +733,7 @@ impl Pmgr {
             let cmd = self.last_adb;
             let adb_data = self.adb_data.clone();
             let len = self.adb_data_length;
+            let srq_waiting = self.srq_waiting;
             if let Some(device) = self.adb_find_device(cmd >> 4) {
                 match cmd & 0x0D {
                     0x01 => {
@@ -681,7 +743,9 @@ impl Pmgr {
                         device.listen(cmd & 3, &adb_data[0..len as usize]);
                     }
                     0x0C | 0x0D => {
-                        self.adb_response = device.talk(cmd & 3);
+                        if !srq_waiting {
+                            self.adb_response = device.talk(cmd & 3);
+                        }
                     }
                     _ => {
                         println!("Unknown ADB command: {:X}", cmd);
@@ -709,14 +773,17 @@ impl Pmgr {
     fn adb_srq(&mut self) {
         if self.adb_devices.iter().any(|d| d.get_srq()) & !self.interrupt_flags.adbint() {
             if let Some(device) = self.adb_devices.iter_mut().find(|d| d.get_srq()) {
-                self.adb_status.0 &= 0b101;
-                self.adb_response = device.talk(0);
+                self.srq_waiting = true;
                 self.interrupt_flags.set_adbint(true);
+
+                self.adb_status.0 &= 0b101;
+                //self.adb_response = device.talk(0);
+                //self.interrupt_flags.set_adbint(true);
 
                 println!("SRQ: {:2X}", device.get_address());
 
-                self.new_adb_device = device.get_address();
-                self.srq_waiting = true;
+                //self.new_adb_device = device.get_address();
+                //self.srq_waiting = true;
             } else {
                 self.adb_status.set_srq(false);
             }
@@ -857,6 +924,9 @@ impl Tickable for Pmgr {
                     .cmd(self.cmd, self.length, self.data.to_owned())
                     .1
                     .unwrap_or(vec![0; 4]);
+                //let cmd_result = self.cmd(self.cmd, self.length, self.data.to_owned());
+                //                 println!("Command {:02X} returned: {:?}", self.cmd, cmd_result.1);
+                //                 self.data = cmd_result.1.unwrap_or(vec![0; 4]);
                 if self.read {
                     self.state = State::ReturnCmd;
                 } else {
